@@ -22,8 +22,22 @@ def set_view_shading(context, shading_type='SOLID'):
                 sp = area.spaces.active
                 if hasattr(sp, "shading"):
                     sp.shading.type = shading_type
+                    return True
     except Exception:
         pass
+    return False
+
+def get_current_shading(context):
+    """Get current viewport shading type."""
+    try:
+        for area in context.screen.areas:
+            if area.type == 'VIEW_3D':
+                sp = area.spaces.active
+                if hasattr(sp, "shading"):
+                    return sp.shading.type
+    except Exception:
+        pass
+    return 'SOLID'  # fallback
 
 def ensure_visible(obj):
     """Make object visible in viewport (best-effort)."""

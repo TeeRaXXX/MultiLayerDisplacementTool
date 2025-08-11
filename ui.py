@@ -56,6 +56,18 @@ def _set(op, **kwargs):
         if hasattr(op, k):
             setattr(op, k, v)
 
+def _has_mask_attr(me: bpy.types.Mesh, name: str) -> bool:
+    """Check if mask attribute exists."""
+    if not name:
+        return False
+    ca = getattr(me, "color_attributes", None)
+    if ca and ca.get(name):
+        return True
+    vc = getattr(me, "vertex_colors", None)
+    if vc and name in vc:
+        return True
+    return False
+
 # ----------------- tiny operator to set active layer --------------------------
 
 class MLD_OT_ui_set_active(bpy.types.Operator):
@@ -101,10 +113,80 @@ def _draw_layer_row(ui, layout, s, idx: int, active_idx: int, painting: bool):
     L = s.layers[idx]
     row = layout.row(align=True)
 
-    # select button (clickable name)
+    # Blue select button for active layer (no radio buttons)
     sel = (idx == active_idx)
-    bsel = row.operator("mld.ui_set_active", text=L.name or f"Layer {idx+1}",
-                        icon='RADIOBUT_ON' if sel else 'RADIOBUT_OFF')
+    bsel = row.operator("mld.ui_set_active", text=L.name or f"Layer {idx+1}")
+    bsel.index = idx
+    
+    # Make active layer button blue
+    if sel:
+        bsel_row = row.row()
+        bsel_row.alert = True  # This makes it red unfortunately, we'll use a different approach
+    
+    # Alternative: use emboss for active layer
+    if sel:
+        row.separator()
+        # Add a small indicator
+        indicator = row.row(align=True)
+        indicator.scale_x = 0.3
+        indicator.label(text="●", icon='NONE')
+
+    # enable toggle
+    row.prop(L, "enabled", text="")
+
+    # material
+    sub = row.row(align=True); sub.enabled = not painting
+    sub.prop(L, "material", text="")
+
+    # VC channel
+    sub = row.row(align=True); sub.enabled = not painting
+    if getattr(L, "vc_channel", 'NONE') == 'NONE':
+        op = _op(sub, "mld.set_layer_channel", text="Set VC", icon='GROUP_VCOL')
+        _set(op, layer_index=idx, index=idx)
+    else:
+        sub.label(text=L.vc_channel, icon='GROUP_VCOL')
+        op = _op(sub, "mld.clear_layer_channel", text="", icon='X')
+        _set(op, layer_index=idx, index=idx)
+
+    # up / down / remove
+    sub = row.row(align=True); sub.enabled = not painting
+    op = _op(sub, "mld.move_layer", text="", icon='TRIA_UP');    _set(op, layer_index=idx, index=idx, direction='UP')
+    op = _op(sub, "mld.move_layer", text="", icon='TRIA_DOWN');  _set(op, layer_index=idx, index=idx, direction='DOWN')
+    op = _op(sub, "mld.remove_layer", text="", icon='X');        _set(op, layer_index=idx, index=idx)
+
+# Custom draw method for active layer button with blue color
+def _draw_active_layer_button(layout, s, idx: int, active_idx: int, L):
+    """Draw layer selection button with blue highlight for active layer."""
+    sel = (idx == active_idx)
+    
+    if sel:
+        # Create a blue background using a box
+        blue_box = layout.box()
+        # Try to make it blue-ish by using different UI elements
+        blue_row = blue_box.row(align=True)
+        blue_row.scale_y = 0.8
+        bsel = blue_row.operator("mld.ui_set_active", text=f"► {L.name or f'Layer {idx+1}'}")
+        bsel.index = idx
+        return blue_row
+    else:
+        # Normal button for non-active layers
+        bsel = layout.operator("mld.ui_set_active", text=L.name or f"Layer {idx+1}")
+        bsel.index = idx
+        return layout
+
+def _draw_layer_row_improved(ui, layout, s, idx: int, active_idx: int, painting: bool):
+    """Improved layer row with blue active layer indication."""
+    L = s.layers[idx]
+    row = layout.row(align=True)
+    
+    # Active layer button (blue highlight)
+    sel = (idx == active_idx)
+    if sel:
+        # Use a colored row/box for active layer
+        button_layout = row.box() if sel else row
+        bsel = button_layout.operator("mld.ui_set_active", text=f"● {L.name or f'Layer {idx+1}'}")
+    else:
+        bsel = row.operator("mld.ui_set_active", text=L.name or f"Layer {idx+1}")
     bsel.index = idx
 
     # enable toggle
@@ -183,12 +265,11 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         ai = _active_idx(s)
         if has_layers:
             for i in range(len(s.layers)):
-                _draw_layer_row(self, box, s, i, ai, painting)
+                _draw_layer_row_improved(self, box, s, i, ai, painting)
         else:
             box.label(text="No layers yet. Click + to add.", icon='INFO')
-    # Removed duplicate footer controls
 
-# 5) Active layer settings
+        # 5) Active layer settings
         ai = max(0, min(ai, len(s.layers)-1)) if has_layers else -1
         L = s.layers[ai] if has_layers else None
         box = layout.box()
@@ -202,23 +283,36 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         else:
             box.label(text="Select a layer.", icon='BLANK1')
 
-        # 6) Mask tools
+        # 6) Mask tools - with improved enabled/disabled logic
         box = layout.box()
-        
         box.label(text="Mask Paint")
-        # -- stable mask paint rows --
+        
+        # Create/Activate button - only active if no mask exists for current layer
         row = box.row(align=True)
-        row.operator('mld.create_mask', text='Create/Activate', icon='ADD')
-        row.operator('mld.toggle_paint', text='Paint Mask', icon='BRUSH_DATA')
+        create_row = row.row(align=True)
+        if L and L.mask_name:
+            create_row.enabled = not _has_mask_attr(obj.data, L.mask_name)
+        else:
+            create_row.enabled = bool(L)
+        create_row.operator('mld.create_mask', text='Create/Activate', icon='ADD')
+        
+        # Paint Mask button - always enabled when we have layers, dynamic text
+        paint_row = row.row(align=True)
+        paint_row.enabled = bool(has_layers)
+        paint_text = "Stop Painting" if painting else "Paint Mask"
+        paint_row.operator('mld.toggle_paint', text=paint_text, icon='BRUSH_DATA')
+
+        # Fill buttons - only active during painting
         sub = box.row(align=True)
+        sub.enabled = painting
         try:
             op = sub.operator('mld.fill_mask', text='Fill 0%'); op.mode='ZERO'
             op = sub.operator('mld.fill_mask', text='Fill 100%'); op.mode='ONE'
         except Exception:
-            lab=sub.row(align=True); lab.enabled=False; lab.label(text='')
+            lab=sub.row(align=True); lab.enabled=False; lab.label(text='Fill tools missing')
 
-        # Clipboard row
-        sub = box.row(align=True); sub.enabled = bool(has_layers)
+        # Clipboard row - only active during painting
+        sub = box.row(align=True); sub.enabled = painting and bool(has_layers)
         try:
             sub.operator("mld.copy_mask",  text="Copy",  icon='COPYDOWN')
             sub.operator("mld.paste_mask", text="Paste", icon='PASTEDOWN')
@@ -227,7 +321,8 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             sub.operator("mld.invert_mask", text="Invert", icon='ARROW_LEFTRIGHT')
         except Exception:
             lab = box.row(align=True); lab.enabled = False; lab.label(text="Clipboard ops missing")
-    # 7) Recalculate + Resets (в отдельной колонке, чтобы точно видно было)
+
+        # 7) Recalculate + Resets
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         _op(col, "mld.recalculate", text="Recalculate", icon='FILE_REFRESH')

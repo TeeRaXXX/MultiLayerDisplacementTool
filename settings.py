@@ -38,6 +38,31 @@ def _on_preview_param(self, context):
         _preview_rebuild(context.object, self)
 
 # ------------------------------------------------------------------------------
+# Layer switching callback
+# ------------------------------------------------------------------------------
+
+def _on_active_layer_change(self, context):
+    """Called when active layer index changes - switch to that layer's mask."""
+    try:
+        from .ops_masks import switch_to_active_mask
+        obj = context.object
+        if obj and obj.type == 'MESH':
+            switch_to_active_mask(obj, self)
+            
+            # If we're in painting mode, also ensure the new layer's mask name is set
+            if _get_is_painting(self):
+                try:
+                    ai = _get_active_layer_index(self)
+                    if 0 <= ai < len(self.layers):
+                        L = self.layers[ai]
+                        if not getattr(L, "mask_name", ""):
+                            L.mask_name = f"MLD_Mask_{ai+1}"
+                except Exception:
+                    pass
+    except Exception as e:
+        print("[MLD] Failed to switch mask on layer change:", e)
+
+# ------------------------------------------------------------------------------
 # Per-layer settings
 # ------------------------------------------------------------------------------
 
@@ -102,7 +127,13 @@ def _get_is_painting(self): return bool(getattr(self, "painting", False))
 def _set_is_painting(self, v): self["painting"] = bool(v)
 
 def _get_active_layer_index(self): return int(getattr(self, "active_index", 0))
-def _set_active_layer_index(self, v): self["active_index"] = int(v)
+def _set_active_layer_index(self, v): 
+    old_val = self.get("active_index", 0)
+    new_val = int(v)
+    self["active_index"] = new_val
+    # Trigger mask switch if value actually changed
+    if old_val != new_val:
+        _on_active_layer_change(self, bpy.context)
 
 def _get_auto_assign_on_recalc(self): return bool(getattr(self, "auto_assign_materials", False))
 def _set_auto_assign_on_recalc(self, v): self["auto_assign_materials"] = bool(v)
@@ -134,8 +165,11 @@ def _set_mat_assign_threshold(self, v): self["mask_threshold"] = float(v)
 
 # ------------------------------------------------------------------------------
 class MLD_Settings(PropertyGroup):
-    # UI / runtime
-    active_index: IntProperty(name="Active Layer", default=0, min=0)
+    # UI / runtime with layer change callback
+    active_index: IntProperty(
+        name="Active Layer", default=0, min=0,
+        update=_on_active_layer_change
+    )
     painting: BoolProperty(name="Painting Mode", default=False)
 
     # Global displacement parameters
