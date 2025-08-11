@@ -7,7 +7,7 @@ from .constants import GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
 class MLD_OT_reset_all(Operator):
     bl_idname = "mld.reset_all"
     bl_label = "Reset All"
-    bl_description = "Clear GN & carrier, remove all MLD masks and settings"
+    bl_description = "Clear GN & carrier, remove all MLD masks, materials and settings"
 
     def execute(self, context):
         obj = active_obj(context)
@@ -15,7 +15,15 @@ class MLD_OT_reset_all(Operator):
             return {'CANCELLED'}
         s = obj.mld_settings
 
-        # remove modifiers
+        # Exit painting mode if active
+        if getattr(s, 'is_painting', False) or getattr(s, 'painting', False):
+            try:
+                if obj.mode == 'VERTEX_PAINT':
+                    bpy.ops.paint.vertex_paint_toggle()
+            except Exception:
+                pass
+
+        # Remove modifiers
         for name in (GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:
@@ -24,7 +32,7 @@ class MLD_OT_reset_all(Operator):
                 except Exception:
                     pass
 
-        # remove carrier
+        # Remove carrier
         cname = f"MLD_Carrier::{obj.name}"
         carr = bpy.data.objects.get(cname)
         if carr:
@@ -36,37 +44,27 @@ class MLD_OT_reset_all(Operator):
             except Exception:
                 pass
 
-        # remove preview material (если есть и не используется)
-        pname = f"MLD_Preview::{obj.name}"
-        pm = bpy.data.materials.get(pname)
-        if pm and pm.users == 0:
-            try:
-                bpy.data.materials.remove(pm, do_unlink=True)
-            except Exception:
-                pass
+        # Remove mask attributes using new cleanup function
+        try:
+            from .ops_masks import cleanup_mask_attributes
+            removed_attrs = cleanup_mask_attributes(obj)
+            print(f"[MLD] Removed attributes: {removed_attrs}")
+        except Exception as e:
+            print(f"[MLD] Failed to clean attributes: {e}")
 
-        # удалить маски/пак VC на самом меше
-        me = obj.data
-        if hasattr(me, "color_attributes"):
-            for a in list(me.color_attributes):
-                if a.name.startswith("MLD_Mask_") or a.name == "MLD_Pack":
-                    try:
-                        me.color_attributes.remove(a)
-                    except Exception:
-                        pass
-        elif hasattr(me, "vertex_colors"):
-            for a in list(me.vertex_colors):
-                if a.name.startswith("MLD_Mask_") or a.name == "MLD_Pack":
-                    try:
-                        me.vertex_colors.remove(a)
-                    except Exception:
-                        pass
-        me.update()
+        # Remove MLD materials using new cleanup function
+        try:
+            from .settings import remove_mld_materials
+            removed_mats = remove_mld_materials(obj)
+            print(f"[MLD] Removed materials: {removed_mats}")
+        except Exception as e:
+            print(f"[MLD] Failed to clean materials: {e}")
 
-        # сброс настроек
+        # Reset settings
         s.layers.clear()
         s.is_painting = False
         s.vc_packed = False
+        s.active_index = 0
 
         self.report({'INFO'}, "MLD: Reset All done.")
         return {'FINISHED'}

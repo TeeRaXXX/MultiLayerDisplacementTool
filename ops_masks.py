@@ -37,17 +37,25 @@ def _ensure_active_mask_name(s):
         return "MLD_Mask_1"
 
 def _ensure_color_attr(me: bpy.types.Mesh, name: str):
+    """Ensure color attribute exists for masks."""
     ca = getattr(me, "color_attributes", None)
     if not ca:
         return None
     attr = ca.get(name) if hasattr(ca, "get") else None
     if not attr:
-        # FLOAT_COLOR/ByteColor both fine for masks; use FLOAT_COLOR for precision.
+        # FLOAT_COLOR for precision in masks
         try:
             attr = ca.new(name=name, type='FLOAT_COLOR', domain='CORNER')
         except Exception:
             # fallback domain
-            attr = ca.new(name=name, type='FLOAT_COLOR', domain='POINT')
+            try:
+                attr = ca.new(name=name, type='FLOAT_COLOR', domain='POINT')
+            except Exception:
+                # last resort - byte color
+                try:
+                    attr = ca.new(name=name, type='BYTE_COLOR', domain='CORNER')
+                except Exception:
+                    attr = ca.new(name=name, type='BYTE_COLOR', domain='POINT')
     return attr
 
 def _iter_colors(attr):
@@ -94,11 +102,11 @@ def _restore_shading_mode(context):
         pass
 
 def _switch_to_active_mask(obj, s):
-    """Switch to the mask of currently active layer."""
+    """Switch to the mask of currently active layer and ensure it's displayed."""
     if not obj or not s or len(s.layers) == 0:
         return
     
-    name = _active_mask_name(s)  # Use read-only version
+    name = _active_mask_name(s)
     if not name:
         return
     
@@ -107,23 +115,62 @@ def _switch_to_active_mask(obj, s):
         attr = _ensure_color_attr(obj.data, name)
         if not attr:
             return
+        # Initialize new mask with black (no mask)
+        try:
+            for d in _iter_colors(attr):
+                d.color = (0.0, 0.0, 0.0, 1.0)
+            obj.data.update()
+        except Exception:
+            pass
     elif not _has_mask_attr(obj.data, name):
         return
     
+    # Get the mask attribute
+    attr = None
     try:
         attr = obj.data.color_attributes.get(name)
-        if attr:
-            obj.data.color_attributes.active = attr
-            return
     except Exception:
-        pass
+        try:
+            attr = obj.data.vertex_colors.get(name) 
+        except Exception:
+            pass
     
+    if not attr:
+        return
+    
+    # Set as active attribute
     try:
-        attr = obj.data.vertex_colors.get(name)
-        if attr:
+        if hasattr(obj.data, "color_attributes"):
+            obj.data.color_attributes.active = attr
+        else:
             obj.data.vertex_colors.active = attr
     except Exception:
         pass
+    
+    # CRITICAL: Set the attribute for vertex paint display
+    if _get_paint(s) and obj.mode == 'VERTEX_PAINT':
+        try:
+            # Force the vertex paint system to use this specific attribute
+            obj.data.color_attributes.active_color = attr
+            
+            # Also try the render color (for display)
+            try:
+                obj.data.color_attributes.render_color_index = obj.data.color_attributes.find(name)
+            except:
+                pass
+                
+            # Update mesh and force viewport refresh
+            obj.data.update()
+            
+            # Refresh all 3D viewports
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+                    
+            print(f"[MLD] Switched to mask: {name}")
+                    
+        except Exception as e:
+            print(f"[MLD] Failed to switch viewport to mask {name}: {e}")
 
 # --- Operators ----------------------------------------------------------------
 
@@ -156,19 +203,32 @@ class MLD_OT_create_mask(Operator):
         if not s or len(getattr(s, "layers", [])) == 0:
             return {'CANCELLED'}
         
-        # Ensure mask name is set (safe to modify in execute())
+        # Ensure mask name is set
         name = _ensure_active_mask_name(s)
         attr = _ensure_color_attr(obj.data, name)
         if not attr:
             return {'CANCELLED'}
-        # Make it active in mesh
+            
+        # Initialize new mask with black color (0 = no mask)
         try:
-            obj.data.color_attributes.active = attr
+            for d in _iter_colors(attr):
+                # Set to black with full alpha (no mask initially)
+                d.color = (0.0, 0.0, 0.0, 1.0)
+            obj.data.update()
         except Exception:
-            try:
-                obj.data.vertex_colors.active = attr  # very old fallback
-            except Exception:
-                pass
+            pass
+            
+        # Make it active and visible in vertex paint
+        try:
+            if hasattr(obj.data, "color_attributes"):
+                obj.data.color_attributes.active = attr
+                obj.data.color_attributes.active_color = attr
+            else:
+                obj.data.vertex_colors.active = attr
+        except Exception:
+            pass
+            
+        print(f"[MLD] Created/activated mask: {name}")
         return {'FINISHED'}
 
 
@@ -193,13 +253,26 @@ class MLD_OT_toggle_paint(Operator):
             set_view_shading(ctx, 'SOLID')
             
             # Ensure mask attribute exists/active
-            name = _ensure_active_mask_name(s)  # Use safe version
+            name = _ensure_active_mask_name(s)
             attr = _ensure_color_attr(obj.data, name)
             if attr:
+                # Initialize if empty
                 try:
-                    obj.data.color_attributes.active = attr
+                    for d in _iter_colors(attr):
+                        d.color = (0.0, 0.0, 0.0, 1.0)
+                    obj.data.update()
                 except Exception:
                     pass
+                    
+                # Set as active for viewport display
+                try:
+                    obj.data.color_attributes.active = attr
+                    obj.data.color_attributes.active_color = attr
+                except Exception:
+                    try:
+                        obj.data.vertex_colors.active = attr
+                    except Exception:
+                        pass
             
             # Switch to Vertex Paint mode
             try:
@@ -249,20 +322,34 @@ class MLD_OT_fill_mask(Operator):
         s = getattr(obj, "mld_settings", None)
         if not s:
             return {'CANCELLED'}
-        name = _ensure_active_mask_name(s)  # Use safe version
+            
+        name = _ensure_active_mask_name(s)
         attr = _ensure_color_attr(obj.data, name)
         if not attr:
             return {'CANCELLED'}
+            
+        # Fill value: 0.0 for zero, 1.0 for 100%
         val = 0.0 if self.mode == 'ZERO' else 1.0
+        
         try:
             for d in _iter_colors(attr):
-                # store mask in Red, keep alpha = 1
-                c = list(getattr(d, "color", (0.0,0.0,0.0,1.0)))
-                c[0] = val
+                # Get current color
+                c = list(getattr(d, "color", (0.0, 0.0, 0.0, 1.0)))
+                # Set ONLY red channel (mask value), keep others
+                c[0] = val  # Red channel = mask
+                # Keep alpha = 1.0 for visibility
                 c[3] = 1.0
-                d.color = c
-        except Exception:
-            pass
+                d.color = tuple(c)
+        except Exception as e:
+            print(f"[MLD] Fill mask failed: {e}")
+            
+        obj.data.update()
+        
+        # Force viewport refresh
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+                
         return {'FINISHED'}
 
 
@@ -286,14 +373,25 @@ class MLD_OT_copy_mask(Operator):
         global _MASK_CLIPBOARD
         obj = ctx.object
         s = getattr(obj, "mld_settings", None) if obj else None
-        if not (obj and s): return {'CANCELLED'}
-        name = _ensure_active_mask_name(s)  # Use safe version
+        if not (obj and s): 
+            return {'CANCELLED'}
+            
+        name = _ensure_active_mask_name(s)
         attr = _ensure_color_attr(obj.data, name)
-        if not attr: return {'CANCELLED'}
+        if not attr: 
+            return {'CANCELLED'}
+            
         try:
-            _MASK_CLIPBOARD = [tuple(d.color) for d in _iter_colors(attr)]
-        except Exception:
+            # Copy ONLY the red channel values (mask data)
+            _MASK_CLIPBOARD = []
+            for d in _iter_colors(attr):
+                color = getattr(d, "color", (0.0, 0.0, 0.0, 1.0))
+                # Store only red channel value
+                _MASK_CLIPBOARD.append(float(color[0]))
+        except Exception as e:
+            print(f"[MLD] Copy mask failed: {e}")
             _MASK_CLIPBOARD = None
+            
         return {'FINISHED'}
 
 
@@ -317,20 +415,40 @@ class MLD_OT_paste_mask(Operator):
         global _MASK_CLIPBOARD
         if not _MASK_CLIPBOARD:
             return {'CANCELLED'}
+            
         obj = ctx.object
         s = getattr(obj, "mld_settings", None) if obj else None
-        if not (obj and s): return {'CANCELLED'}
-        name = _ensure_active_mask_name(s)  # Use safe version
+        if not (obj and s): 
+            return {'CANCELLED'}
+            
+        name = _ensure_active_mask_name(s)
         attr = _ensure_color_attr(obj.data, name)
-        if not attr: return {'CANCELLED'}
+        if not attr: 
+            return {'CANCELLED'}
+            
         data = list(_iter_colors(attr))
         if len(data) != len(_MASK_CLIPBOARD):
             return {'CANCELLED'}
+            
         try:
+            # Paste ONLY red channel values (mask data)
             for i, d in enumerate(data):
-                d.color = _MASK_CLIPBOARD[i]
-        except Exception:
-            pass
+                c = list(getattr(d, "color", (0.0, 0.0, 0.0, 1.0)))
+                # Set red channel from clipboard
+                c[0] = float(_MASK_CLIPBOARD[i])
+                # Keep alpha = 1.0
+                c[3] = 1.0
+                d.color = tuple(c)
+        except Exception as e:
+            print(f"[MLD] Paste mask failed: {e}")
+            
+        obj.data.update()
+        
+        # Force viewport refresh
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+                
         return {'FINISHED'}
 
 
@@ -350,23 +468,40 @@ class MLD_OT_invert_mask(Operator):
     def execute(self, ctx):
         obj = ctx.object
         s = getattr(obj, "mld_settings", None) if obj else None
-        if not (obj and s): return {'CANCELLED'}
-        name = _ensure_active_mask_name(s)  # Use safe version
+        if not (obj and s): 
+            return {'CANCELLED'}
+            
+        name = _ensure_active_mask_name(s)
         attr = _ensure_color_attr(obj.data, name)
-        if not attr: return {'CANCELLED'}
+        if not attr: 
+            return {'CANCELLED'}
+            
         try:
+            # Invert ONLY red channel (mask data)
             for d in _iter_colors(attr):
-                c = list(getattr(d, "color", (0,0,0,1)))
+                c = list(getattr(d, "color", (0.0, 0.0, 0.0, 1.0)))
+                # Invert red channel
                 c[0] = 1.0 - float(c[0])
-                d.color = c
-        except Exception:
-            pass
+                # Keep alpha = 1.0
+                c[3] = 1.0
+                d.color = tuple(c)
+        except Exception as e:
+            print(f"[MLD] Invert mask failed: {e}")
+            
+        obj.data.update()
+        
+        # Force viewport refresh
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+                
         return {'FINISHED'}
 
 
-class _MaskBlendBase(Operator):
-    """Base for add/sub with clipboard; op='ADD'|'SUB'"""
-    op: bpy.props.StringProperty(default="ADD")
+class MLD_OT_add_mask_from_clip(Operator):
+    bl_idname = "mld.add_mask_from_clip"
+    bl_label  = "Add From Clipboard"
+    bl_options = {'UNDO'}
 
     @classmethod
     def poll(cls, context):
@@ -379,49 +514,104 @@ class _MaskBlendBase(Operator):
         s = getattr(obj, "mld_settings", None)
         return s and _get_paint(s)
 
-    def mix(self, a, b):
-        ra = float(a[0]); rb = float(b[0])
-        if self.op == "ADD":
-            r = max(0.0, min(1.0, ra + rb))
-        else:
-            r = max(0.0, min(1.0, ra - rb))
-        return (r, 0.0, 0.0, 1.0)
-
-    def apply(self, ctx):
+    def execute(self, ctx):
         global _MASK_CLIPBOARD
         if not _MASK_CLIPBOARD: 
-            return False
+            return {'CANCELLED'}
+            
         obj = ctx.object
         s = getattr(obj, "mld_settings", None) if obj else None
-        if not (obj and s): return False
-        name = _ensure_active_mask_name(s)  # Use safe version
+        if not (obj and s): 
+            return {'CANCELLED'}
+            
+        name = _ensure_active_mask_name(s)
         attr = _ensure_color_attr(obj.data, name)
-        if not attr: return False
+        if not attr: 
+            return {'CANCELLED'}
+            
         data = list(_iter_colors(attr))
         if len(data) != len(_MASK_CLIPBOARD):
-            return False
+            return {'CANCELLED'}
+            
         try:
+            # Add operation: current + clipboard
             for i, d in enumerate(data):
-                d.color = self.mix(getattr(d, "color", (0,0,0,1)), _MASK_CLIPBOARD[i])
-            return True
-        except Exception:
-            return False
+                c = list(getattr(d, "color", (0.0, 0.0, 0.0, 1.0)))
+                current_mask = float(c[0])
+                clipboard_mask = float(_MASK_CLIPBOARD[i])
+                new_mask = max(0.0, min(1.0, current_mask + clipboard_mask))
+                c[0] = new_mask
+                c[3] = 1.0
+                d.color = tuple(c)
+            obj.data.update()
+            
+            # Force viewport refresh
+            for area in ctx.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+                    
+            return {'FINISHED'}
+        except Exception as e:
+            print(f"[MLD] Add mask failed: {e}")
+            return {'CANCELLED'}
 
-class MLD_OT_add_mask_from_clip(_MaskBlendBase):
-    bl_idname = "mld.add_mask_from_clip"
-    bl_label  = "Add From Clipboard"
-    bl_options = {'UNDO'}
-    def __init__(self): self.op = "ADD"
-    def execute(self, ctx):
-        return {'FINISHED'} if self.apply(ctx) else {'CANCELLED'}
 
-class MLD_OT_sub_mask_from_clip(_MaskBlendBase):
+class MLD_OT_sub_mask_from_clip(Operator):
     bl_idname = "mld.sub_mask_from_clip"
     bl_label  = "Subtract From Clipboard"
     bl_options = {'UNDO'}
-    def __init__(self): self.op = "SUB"
+
+    @classmethod
+    def poll(cls, context):
+        global _MASK_CLIPBOARD
+        if not _MASK_CLIPBOARD:
+            return False
+        obj = context.object
+        if not obj or obj.type != 'MESH':
+            return False
+        s = getattr(obj, "mld_settings", None)
+        return s and _get_paint(s)
+
     def execute(self, ctx):
-        return {'FINISHED'} if self.apply(ctx) else {'CANCELLED'}
+        global _MASK_CLIPBOARD
+        if not _MASK_CLIPBOARD: 
+            return {'CANCELLED'}
+            
+        obj = ctx.object
+        s = getattr(obj, "mld_settings", None) if obj else None
+        if not (obj and s): 
+            return {'CANCELLED'}
+            
+        name = _ensure_active_mask_name(s)
+        attr = _ensure_color_attr(obj.data, name)
+        if not attr: 
+            return {'CANCELLED'}
+            
+        data = list(_iter_colors(attr))
+        if len(data) != len(_MASK_CLIPBOARD):
+            return {'CANCELLED'}
+            
+        try:
+            # Subtract operation: current - clipboard
+            for i, d in enumerate(data):
+                c = list(getattr(d, "color", (0.0, 0.0, 0.0, 1.0)))
+                current_mask = float(c[0])
+                clipboard_mask = float(_MASK_CLIPBOARD[i])
+                new_mask = max(0.0, min(1.0, current_mask - clipboard_mask))
+                c[0] = new_mask
+                c[3] = 1.0
+                d.color = tuple(c)
+            obj.data.update()
+            
+            # Force viewport refresh
+            for area in ctx.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+                    
+            return {'FINISHED'}
+        except Exception as e:
+            print(f"[MLD] Subtract mask failed: {e}")
+            return {'CANCELLED'}
 
 
 _CLASSES = (
@@ -437,10 +627,7 @@ _CLASSES = (
 
 def register():
     for cls in _CLASSES:
-        try:
-            bpy.utils.register_class(cls)
-        except RuntimeError:
-            bpy.utils.unregister_class(cls); bpy.utils.register_class(cls)
+        bpy.utils.register_class(cls)
 
 def unregister():
     for cls in reversed(_CLASSES):
@@ -453,3 +640,46 @@ def unregister():
 def switch_to_active_mask(obj, s):
     """Public function to switch mask when layer changes."""
     _switch_to_active_mask(obj, s)
+
+def cleanup_mask_attributes(obj):
+    """Remove all MLD mask attributes from object."""
+    if not obj or obj.type != 'MESH':
+        return
+    
+    me = obj.data
+    removed = []
+    
+    # Remove color attributes (masks)
+    if hasattr(me, "color_attributes"):
+        for attr in list(me.color_attributes):
+            if attr.name.startswith("MLD_Mask_") or attr.name == "MLD_Pack":
+                try:
+                    me.color_attributes.remove(attr)
+                    removed.append(attr.name)
+                except Exception:
+                    pass
+    
+    # Remove legacy vertex colors
+    if hasattr(me, "vertex_colors"):
+        for attr in list(me.vertex_colors):
+            if attr.name.startswith("MLD_Mask_") or attr.name == "MLD_Pack":
+                try:
+                    me.vertex_colors.remove(attr)
+                    removed.append(attr.name)
+                except Exception:
+                    pass
+    
+    # Remove point attributes (ALPHA, OFFS)
+    if hasattr(me, "attributes"):
+        for attr in list(me.attributes):
+            if (attr.name.startswith("MLD_A_") or 
+                attr.name == "MLD_Offs" or 
+                attr.name.startswith("MLD_")):
+                try:
+                    me.attributes.remove(attr)
+                    removed.append(attr.name)
+                except Exception:
+                    pass
+    
+    me.update()
+    return removed

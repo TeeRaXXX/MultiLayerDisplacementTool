@@ -96,16 +96,16 @@ def _draw_validation(layout, context, s):
     box = layout.box()
     row = box.row(align=True); row.label(text="Validation", icon='INFO')
     try:
-        from .validation import collect_messages
-        msgs = collect_messages(context, s) or []
+        from .validation import collect_validation
+        msgs = collect_validation(obj) or []
         if not msgs:
-            box.label(text="No issues found (validation module not loaded).", icon='CHECKMARK')
+            box.label(text="No issues found.", icon='CHECKMARK')
         else:
             for t, txt in msgs:
                 icon = 'ERROR' if (t or "").lower() == 'error' else 'QUESTION'
                 box.label(text=txt, icon=icon)
     except Exception:
-        box.label(text="No issues found (validation module not loaded).", icon='CHECKMARK')
+        box.label(text="No issues found.", icon='CHECKMARK')
 
 # ----------------- layer row --------------------------------------------------
 
@@ -263,6 +263,7 @@ class VIEW3D_PT_mld(bpy.types.Panel):
 
         has_layers = len(s.layers) > 0
         ai = _active_idx(s)
+        
         if has_layers:
             for i in range(len(s.layers)):
                 _draw_layer_row_improved(self, box, s, i, ai, painting)
@@ -283,44 +284,46 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         else:
             box.label(text="Select a layer.", icon='BLANK1')
 
-        # 6) Mask tools - with improved enabled/disabled logic
-        box = layout.box()
-        box.label(text="Mask Paint")
-        
-        # Create/Activate button - only active if no mask exists for current layer
-        row = box.row(align=True)
-        create_row = row.row(align=True)
-        if L and L.mask_name:
-            create_row.enabled = not _has_mask_attr(obj.data, L.mask_name)
-        else:
-            create_row.enabled = bool(L)
-        create_row.operator('mld.create_mask', text='Create/Activate', icon='ADD')
-        
-        # Paint Mask button - always enabled when we have layers, dynamic text
-        paint_row = row.row(align=True)
-        paint_row.enabled = bool(has_layers)
-        paint_text = "Stop Painting" if painting else "Paint Mask"
-        paint_row.operator('mld.toggle_paint', text=paint_text, icon='BRUSH_DATA')
+        # 6) Mask tools - always show if we have any layers
+        if has_layers:
+            box = layout.box()
+            box.label(text="Mask Paint")
+            
+            # Create/Activate button - only active if no mask exists for current layer
+            row = box.row(align=True)
+            create_row = row.row(align=True)
+            if L and L.mask_name:
+                create_row.enabled = not _has_mask_attr(obj.data, L.mask_name)
+            else:
+                create_row.enabled = bool(L)
+            create_row.operator('mld.create_mask', text='Create/Activate', icon='ADD')
+            
+            # Paint Mask button - always enabled when we have layers, dynamic text
+            paint_row = row.row(align=True)
+            paint_row.enabled = bool(has_layers)
+            paint_text = "Stop Painting" if painting else "Paint Mask"
+            paint_row.operator('mld.toggle_paint', text=paint_text, icon='BRUSH_DATA')
 
-        # Fill buttons - only active during painting
-        sub = box.row(align=True)
-        sub.enabled = painting
-        try:
-            op = sub.operator('mld.fill_mask', text='Fill 0%'); op.mode='ZERO'
-            op = sub.operator('mld.fill_mask', text='Fill 100%'); op.mode='ONE'
-        except Exception:
-            lab=sub.row(align=True); lab.enabled=False; lab.label(text='Fill tools missing')
+            # Fill buttons - only active during painting
+            sub = box.row(align=True)
+            sub.enabled = painting
+            op1 = sub.operator('mld.fill_mask', text='Fill 0%')
+            if op1: op1.mode = 'ZERO'
+            op2 = sub.operator('mld.fill_mask', text='Fill 100%') 
+            if op2: op2.mode = 'ONE'
 
-        # Clipboard row - only active during painting
-        sub = box.row(align=True); sub.enabled = painting and bool(has_layers)
-        try:
+            # Clipboard row - only active during painting
+            sub = box.row(align=True); sub.enabled = painting and bool(has_layers)
             sub.operator("mld.copy_mask",  text="Copy",  icon='COPYDOWN')
             sub.operator("mld.paste_mask", text="Paste", icon='PASTEDOWN')
             sub.operator("mld.add_mask_from_clip", text="Add", icon='ADD')
             sub.operator("mld.sub_mask_from_clip", text="Sub", icon='REMOVE')
             sub.operator("mld.invert_mask", text="Invert", icon='ARROW_LEFTRIGHT')
-        except Exception:
-            lab = box.row(align=True); lab.enabled = False; lab.label(text="Clipboard ops missing")
+        else:
+            # Show message when no layers
+            box = layout.box()
+            box.label(text="Mask Paint")
+            box.label(text="Add layers to enable mask tools.", icon='INFO')
 
         # 7) Recalculate + Resets
         box = layout.box()

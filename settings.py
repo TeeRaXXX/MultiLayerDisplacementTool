@@ -62,6 +62,41 @@ def _on_active_layer_change(self, context):
     except Exception as e:
         print("[MLD] Failed to switch mask on layer change:", e)
 
+def remove_mld_materials(obj):
+    """Remove MLD-generated materials from object."""
+    if not obj or obj.type != 'MESH':
+        return []
+        
+    removed = []
+    materials_to_remove = []
+    
+    # Find MLD materials in object slots
+    for i, mat in enumerate(obj.data.materials):
+        if mat and mat.name.startswith("MLD_Preview::"):
+            materials_to_remove.append((i, mat))
+            
+    # Remove from slots (in reverse order to maintain indices)
+    for i, mat in reversed(materials_to_remove):
+        try:
+            obj.data.materials.pop(index=i)
+            removed.append(mat.name)
+        except Exception:
+            pass
+    
+    # Remove unused MLD materials from data
+    mld_materials = [mat for mat in bpy.data.materials 
+                     if mat.name.startswith("MLD_Preview::") and mat.users == 0]
+    
+    for mat in mld_materials:
+        try:
+            bpy.data.materials.remove(mat, do_unlink=True)
+            if mat.name not in removed:
+                removed.append(mat.name)
+        except Exception:
+            pass
+            
+    return removed
+
 # ------------------------------------------------------------------------------
 # Per-layer settings
 # ------------------------------------------------------------------------------
