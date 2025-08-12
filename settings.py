@@ -114,48 +114,39 @@ VC_ENUM = [
 class MLD_Layer(PropertyGroup):
     enabled: BoolProperty(
         name="Enabled", default=True,
-        description="Enable this layer in displacement and preview (applied on Recalculate)",
-        # НЕТ update callback
+        description="Enable this layer in displacement and preview",
     )
     name: StringProperty(
         name="Layer Name", default="New Layer",
         description="Display name (UI). Will be replaced by Material name when set",
-        # НЕТ update callback
     )
-    def _update_name_from_mat_deferred(self, context):
-        """Deferred material name update - НЕ вызывает пересчеты."""
+    def _update_name_from_mat(self, context):
         if self.material and self.material.name:
             self.name = self.material.name
-    
     material: PointerProperty(
         name="Material", type=bpy.types.Material,
-        description="Material used for this layer (applied on Recalculate)",
-        update=_update_name_from_mat_deferred,  # Только имя, НЕ пересчеты
+        description="Material used for this layer (BaseColor for preview, Displacement->Height for height sampling)",
+        update=_update_name_from_mat,
     )
     multiplier: FloatProperty(
         name="Multiplier", default=1.0, soft_min=-8.0, soft_max=8.0,
-        description="Multiply sampled height (applied on Recalculate)",
-        # НЕТ update callback
+        description="Multiply sampled height (per-layer)",
     )
     bias: FloatProperty(
         name="Bias", default=0.0, soft_min=-1.0, soft_max=1.0,
-        description="Add to sampled height (applied on Recalculate)",
-        # НЕТ update callback
+        description="Add to sampled height (per-layer)",
     )
     tiling: FloatProperty(
         name="Tiling", default=1.0, min=1e-6, soft_min=0.01, soft_max=32.0,
-        description="UV scale for this layer (applied on Recalculate)",
-        # НЕТ update callback
+        description="UV scale for this layer",
     )
     mask_name: StringProperty(
         name="Mask Attribute", default="",
         description="Vertex Color attribute name used as a mask (Red channel)",
-        # НЕТ update callback
     )
     vc_channel: EnumProperty(
         name="VC Channel", items=VC_ENUM, default='NONE',
         description="Pack this layer into chosen vertex color channel on Pack VC",
-        # НЕТ update callback
     )
 
 # ------------------------------------------------------------------------------
@@ -249,21 +240,18 @@ class MLD_Settings(PropertyGroup):
     )
     painting: BoolProperty(name="Painting Mode", default=False)
 
-    # Global displacement parameters - БЕЗ update callbacks
+    # Global displacement parameters
     strength: FloatProperty(
         name="Global Strength", default=0.10, soft_min=-5.0, soft_max=5.0,
-        description="Overall displacement strength applied to the height result (applied on Recalculate)",
-        # НЕТ update callback
+        description="Overall displacement strength applied to the height result",
     )
     midlevel: FloatProperty(
         name="Midlevel", default=0.50, min=0.0, max=1.0,
-        description="Reference midlevel (subtracted from blended height before strength) (applied on Recalculate)",
-        # НЕТ update callback
+        description="Reference midlevel (subtracted from blended height before strength)",
     )
     fill_power: FloatProperty(
         name="Fill Power", default=1.0, min=0.0, soft_max=4.0,
-        description="Controls how aggressively higher layers 'fill' over lower layers (applied on Recalculate)",
-        # НЕТ update callback
+        description="Controls how aggressively higher layers 'fill' over lower layers",
     )
 
     # Layers
@@ -293,38 +281,35 @@ class MLD_Settings(PropertyGroup):
         # НЕТ update callback
     )
 
-    # Materials auto-assign after recalc - БЕЗ update callbacks
+    # Materials auto-assign after recalc
     auto_assign_materials: BoolProperty(
         name="Auto assign on Recalculate", default=True,
         description="Assign object polygons to layer materials using displacement result after Recalculate",
-        # НЕТ update callback
     )
-    # Thresholds (two names kept for cross-module compatibility) - БЕЗ update callbacks
+    # Thresholds (two names kept for cross-module compatibility)
     mask_threshold: FloatProperty(
         name="Mask Threshold", default=0.05, min=0.0, max=1.0,
         description="Minimum visible contribution to assign a polygon to layer's material",
-        # НЕТ update callback
     )
     assign_threshold: FloatProperty(
         name="Assign Threshold (compat)", default=0.05, min=0.0, max=1.0,
         description="Compatibility alias for modules that read a different property name",
-        # НЕТ update callback
     )
 
-    # Preview (materials) — ТОЛЬКО toggle срабатывает сразу
+    # Preview (materials) — HeightLerp style
     preview_enable: BoolProperty(
         name="Preview blend (materials)", default=False,
         description="Build and assign a HeightLerp-like preview material for the object (applied on Recalculate)",
-        update=_on_toggle_preview_only,  # Только toggle - НЕ rebuild параметров
+        update=_on_toggle_preview,  # Только toggle - включение/выключение
     )
     preview_mask_influence: FloatProperty(
         name="Preview Mask Influence", default=1.0, min=0.0, soft_max=2.0,
-        description="How strongly paint mask affects preview blend (applied on Recalculate)",
+        description="How strongly paint mask affects preview blend",
         # НЕТ update callback - применяется при Recalculate
     )
     preview_contrast: FloatProperty(
         name="Preview Contrast", default=2.0, min=0.0, soft_max=8.0,
-        description="How strongly height difference sharpens preview blend (applied on Recalculate)",
+        description="How strongly height difference sharpens preview blend",
         # НЕТ update callback - применяется при Recalculate
     )
 

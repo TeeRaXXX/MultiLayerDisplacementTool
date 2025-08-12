@@ -6,32 +6,15 @@ from bpy.props import IntProperty
 # ----------------- helpers ----------------------------------------------------
 
 def _s(obj):
-    """Get MLD settings with safe fallback."""
     if obj and getattr(obj, "mld_settings", None):
         return obj.mld_settings
-    scene_settings = getattr(bpy.context.scene, "mld_settings", None)
-    return scene_settings
-
-def _safe_layers(s):
-    """Get layers safely with fallback to empty list."""
-    if not s:
-        return []
-    try:
-        return list(getattr(s, "layers", []))
-    except Exception:
-        return []
+    return getattr(bpy.context.scene, "mld_settings", None)
 
 def _is_painting(s) -> bool:
     return bool(getattr(s, "is_painting", getattr(s, "painting", False)))
 
 def _active_idx(s) -> int:
-    """Get active layer index safely."""
-    if not s:
-        return 0
-    try:
-        return int(getattr(s, "active_layer_index", getattr(s, "active_index", 0)))
-    except Exception:
-        return 0
+    return int(getattr(s, "active_layer_index", getattr(s, "active_index", 0)))
 
 def _polycount_str(obj: bpy.types.Object) -> str:
     """Get comprehensive polycount info with evaluated mesh."""
@@ -116,17 +99,12 @@ class MLD_OT_ui_set_active(bpy.types.Operator):
         s = _s(context.object)
         if not s:
             return {'CANCELLED'}
-        
-        layers = _safe_layers(s)
-        if 0 <= self.index < len(layers):
+        if 0 <= self.index < len(s.layers):
             # old/new names compatibility
-            try:
-                if hasattr(s, "active_layer_index"):
-                    s.active_layer_index = self.index
-                elif hasattr(s, "active_index"):
-                    s.active_index = self.index
-            except Exception:
-                pass
+            if hasattr(s, "active_layer_index"):
+                s.active_layer_index = self.index
+            elif hasattr(s, "active_index"):
+                s.active_index = self.index
         return {'FINISHED'}
 
 # ----------------- validation drawer -----------------------------------------
@@ -151,11 +129,7 @@ def _draw_validation(layout, context, s):
 
 def _draw_layer_row_improved(ui, layout, s, idx: int, active_idx: int, painting: bool):
     """Layer row with active layer indication and smart arrows."""
-    layers = _safe_layers(s)
-    if idx >= len(layers):
-        return
-        
-    L = layers[idx]
+    L = s.layers[idx]
     row = layout.row(align=True)
     
     # Active layer button
@@ -194,7 +168,7 @@ def _draw_layer_row_improved(ui, layout, s, idx: int, active_idx: int, painting:
     _set(op, layer_index=idx, index=idx, direction='UP')
     
     # Down arrow - disabled for bottom layer (last index)
-    down_row = sub.row(); down_row.enabled = (idx < len(layers) - 1)
+    down_row = sub.row(); down_row.enabled = (idx < len(s.layers) - 1)
     op = _op(down_row, "mld.move_layer", text="", icon='TRIA_DOWN')
     _set(op, layer_index=idx, index=idx, direction='DOWN')
     
@@ -270,19 +244,18 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         r = header.row(align=True); r.enabled = not painting
         _op(r, "mld.add_layer", text="", icon='ADD')
 
-        layers = _safe_layers(s)
-        has_layers = len(layers) > 0
+        has_layers = len(s.layers) > 0
         ai = _active_idx(s)
         
         if has_layers:
-            for i in range(len(layers)):
+            for i in range(len(s.layers)):
                 _draw_layer_row_improved(self, box, s, i, ai, painting)
         else:
             box.label(text="No layers yet. Click + to add.", icon='INFO')
 
         # 5) Active layer settings
-        ai = max(0, min(ai, len(layers)-1)) if has_layers else -1
-        L = layers[ai] if has_layers and 0 <= ai < len(layers) else None
+        ai = max(0, min(ai, len(s.layers)-1)) if has_layers else -1
+        L = s.layers[ai] if has_layers else None
         box = layout.box()
         box.label(text="Active Layer Settings")
         if L:
@@ -427,9 +400,8 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         col.label(text="Pack Vertex Colors")
         
         # Show which channels are assigned
-        layers = _safe_layers(s)
         assigned_channels = []
-        for L in layers:
+        for L in s.layers:
             ch = getattr(L, "vc_channel", 'NONE')
             if ch in ['R', 'G', 'B', 'A']:
                 assigned_channels.append(ch)
