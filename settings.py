@@ -266,12 +266,12 @@ class MLD_Settings(PropertyGroup):
         update=_on_toggle_preview,
     )
     preview_mask_influence: FloatProperty(
-        name="Preview Mask Influence", default=0.30, min=0.0, soft_max=2.0,
+        name="Preview Mask Influence", default=1.0, min=0.0, soft_max=2.0,
         description="How strongly paint mask affects preview blend",
         update=_on_preview_param,
     )
     preview_contrast: FloatProperty(
-        name="Preview Contrast", default=1.0, min=0.0, soft_max=4.0,
+        name="Preview Contrast", default=2.0, min=0.0, soft_max=8.0,
         description="How strongly height difference sharpens preview blend",
         update=_on_preview_param,
     )
@@ -291,9 +291,6 @@ class MLD_Settings(PropertyGroup):
         name="Fill empty VC channels with white", default=False,
         description="When packing VC, fill unassigned channels with white (1.0). If all channels are used, this is ignored",
     )
-
-    # Copy/Paste settings clipboard (in-memory)
-    _clipboard_json: StringProperty(name="Clipboard (JSON)", default="")
 
     # helper to mirror thresholds if needed
     def sync_thresholds(self):

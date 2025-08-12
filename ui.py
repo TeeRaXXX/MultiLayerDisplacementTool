@@ -289,20 +289,11 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             box = layout.box()
             box.label(text="Mask Paint")
             
-            # Create/Activate button - only active if no mask exists for current layer
-            row = box.row(align=True)
-            create_row = row.row(align=True)
-            if L and L.mask_name:
-                create_row.enabled = not _has_mask_attr(obj.data, L.mask_name)
-            else:
-                create_row.enabled = bool(L)
-            create_row.operator('mld.create_mask', text='Create/Activate', icon='ADD')
-            
             # Paint Mask button - always enabled when we have layers, dynamic text
-            paint_row = row.row(align=True)
-            paint_row.enabled = bool(has_layers)
+            row = box.row(align=True)
+            row.enabled = bool(has_layers)
             paint_text = "Stop Painting" if painting else "Paint Mask"
-            paint_row.operator('mld.toggle_paint', text=paint_text, icon='BRUSH_DATA')
+            row.operator('mld.toggle_paint', text=paint_text, icon='BRUSH_DATA')
 
             # Fill buttons - only active during painting
             sub = box.row(align=True)
@@ -311,6 +302,12 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             if op1: op1.mode = 'ZERO'
             op2 = sub.operator('mld.fill_mask', text='Fill 100%') 
             if op2: op2.mode = 'ONE'
+
+            # Blur/Sharpen row - only active during painting
+            sub = box.row(align=True)
+            sub.enabled = painting
+            sub.operator("mld.blur_mask", text="Blur", icon='MOD_SMOOTH')
+            sub.operator("mld.sharpen_mask", text="Sharpen", icon='MOD_EDGESPLIT')
 
             # Clipboard row - only active during painting
             sub = box.row(align=True); sub.enabled = painting and bool(has_layers)
