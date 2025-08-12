@@ -47,6 +47,64 @@ def _polycount_str(obj: bpy.types.Object) -> str:
         except Exception:
             return "—"
 
+def _get_detailed_polycount_info(obj: bpy.types.Object, s) -> list:
+    """Get detailed polycount breakdown including displacement and decimate stages."""
+    info_lines = []
+    
+    try:
+        from .utils import polycount, get_evaluated_polycount
+        
+        # Original mesh
+        orig_v, orig_f, orig_t = polycount(obj.data)
+        
+        # Calculate final polycount through pipeline
+        current_tris = orig_t
+        pipeline_info = []
+        
+        # After subdivision (if enabled)
+        if getattr(s, "subdiv_enable", False):
+            subdiv_levels = getattr(s, "subdiv_view", 1)
+            if subdiv_levels > 0:
+                subdiv_tris = orig_t * (4 ** subdiv_levels)
+                current_tris = subdiv_tris
+                pipeline_info.append(f"Subdiv: {subdiv_tris:,}")
+        
+        # After displacement (if we have displacement data)
+        try:
+            has_displacement = False
+            for attr in obj.data.attributes:
+                if attr.name.startswith("MLD_") and attr.data_type == 'FLOAT_VECTOR':
+                    has_displacement = True
+                    break
+            
+            if has_displacement:
+                eval_v, eval_f, eval_t = get_evaluated_polycount(obj)
+                if eval_t != current_tris:
+                    current_tris = eval_t
+                    pipeline_info.append(f"Disp: {eval_t:,}")
+        except Exception:
+            pass
+        
+        # After decimate (if enabled)
+        if getattr(s, "decimate_enable", False):
+            decimate_ratio = getattr(s, "decimate_ratio", 0.5)
+            if decimate_ratio < 1.0:
+                decimate_tris = int(current_tris * decimate_ratio)
+                current_tris = decimate_tris
+                pipeline_info.append(f"Decimate: {decimate_tris:,}")
+        
+        # Create compact summary
+        if len(pipeline_info) > 0:
+            info_lines.append(f"Pipeline: {' → '.join(pipeline_info)}")
+            info_lines.append(f"Final: {current_tris:,} tris")
+        else:
+            info_lines.append(f"Current: {orig_t:,} tris")
+        
+    except Exception:
+        info_lines.append("Error calculating polycount")
+    
+    return info_lines
+
 def _op(layout, idname, text=None, icon='NONE'):
     try:
         return layout.operator(idname, text=text if text is not None else "", icon=icon)
@@ -209,25 +267,20 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         # 2) Polycount with detailed info
         box = layout.box()
         
-        # Current polycount
+        # Current polycount summary
         row = box.row(align=True)
         row.label(text=_polycount_str(obj), icon='MESH_DATA')
         
-        # Additional info if available
-        if hasattr(s, 'last_poly_v') and s.last_poly_v > 0:
+        # Detailed polycount breakdown (compact)
+        detailed_info = _get_detailed_polycount_info(obj, s)
+        if len(detailed_info) > 0:
             col = box.column(align=True)
             col.scale_y = 0.8
             
-            # Subdivision info
-            if getattr(s, "subdiv_enable", False):
-                subdiv_levels = getattr(s, "subdiv_view", 1)
-                if subdiv_levels > 0:
-                    col.label(text=f"Subdivision: {subdiv_levels} levels", icon='MOD_SUBSURF')
-            
-            # Decimate info  
-            if getattr(s, "decimate_enable", False):
-                decimate_ratio = getattr(s, "decimate_ratio", 0.5)
-                col.label(text=f"Decimate: {decimate_ratio:.1%} ratio", icon='MOD_DECIM')
+            for info_line in detailed_info:
+                col.label(text=info_line, icon='NONE')
+        
+        # Legacy info removed for cleaner UI
 
         # 3) Global parameters
         box = layout.box()
@@ -313,7 +366,13 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         # 7) Recalculate + Resets
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
-        _op(col, "mld.recalculate", text="Recalculate", icon='FILE_REFRESH')
+        
+        # Recalculate button - 2x height
+        recalc_row = col.row(align=True)
+        recalc_row.scale_y = 2.0
+        _op(recalc_row, "mld.recalculate", text="Recalculate", icon='FILE_REFRESH')
+        
+        # Reset buttons
         row = col.row(align=True)
         try:
             row.operator("mld.reset_displacement", text="Reset Displacement", icon='LOOP_BACK')
