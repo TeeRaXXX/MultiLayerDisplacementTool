@@ -152,6 +152,21 @@ def _ensure_mask_attr_fast(obj, name):
     
     return attr
 
+def _ensure_mask_attr_active(obj, name):
+    """Ensure mask attribute exists and is set as active."""
+    attr = _ensure_mask_attr_fast(obj, name)
+    if attr:
+        try:
+            # Set as active attribute
+            obj.data.color_attributes.active = attr
+            obj.data.color_attributes.active_color = attr
+        except Exception:
+            try:
+                obj.data.vertex_colors.active = attr
+            except Exception:
+                pass
+    return attr
+
 def switch_to_active_mask_fast(obj, s):
     """Fast mask switching without viewport refresh."""
     if not obj or not s or not s.layers:
@@ -221,6 +236,28 @@ def _apply_to_mask_red_channel_fast(attr, operation):
         return True
     except Exception as e:
         print(f"[MLD] Fast mask operation failed: {e}")
+        return False
+
+def _apply_to_mask_red_channel(attr, operation):
+    """Standard mask operation with mesh.update()."""
+    if not attr:
+        return False
+    
+    try:
+        data = _get_mask_data(attr)
+        if not data:
+            return False
+        
+        # Apply operation to all data
+        for d in data:
+            color = list(d.color)
+            new_red = operation(color[0])
+            # Set proper viewport colors: Red=mask, Green=0, Blue=0, Alpha=1
+            d.color = (new_red, 0.0, 0.0, 1.0)
+        
+        return True
+    except Exception as e:
+        print(f"[MLD] Mask operation failed: {e}")
         return False
 
 # --- Simple clipboard for masks -------------------------------------------

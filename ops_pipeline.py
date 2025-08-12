@@ -454,16 +454,48 @@ def solve_heightfill_for_carrier(obj: bpy.types.Object, s, context, work_mesh: b
                     if not L.enabled:
                         continue
                     
-                    # Mask from original mesh
+                    # Mask from original mesh - proper mapping without tiling
                     m = 0.0
                     if L.mask_name and color_attr_exists(obj.data, L.mask_name):
-                        orig_li = li % len(obj.data.loops) if len(obj.data.loops) > 0 else 0
-                        orig_li = min(orig_li, len(obj.data.loops) - 1)
+                        # Map work mesh loop to original mesh loop properly
+                        if li < len(obj.data.loops):
+                            # Direct mapping if work mesh is not larger than original
+                            orig_li = li
+                        else:
+                            # For subdivided meshes, find the closest original loop
+                            # Get UV coordinates from work mesh
+                            work_uv = work_mesh.uv_layers[uv_name].data[li].uv
+                            
+                            # Find closest original loop by UV distance
+                            min_dist = float('inf')
+                            orig_li = 0
+                            for orig_loop_idx in range(len(obj.data.loops)):
+                                try:
+                                    orig_uv = obj.data.uv_layers[uv_name].data[orig_loop_idx].uv
+                                    dist = ((work_uv.x - orig_uv.x) ** 2 + (work_uv.y - orig_uv.y) ** 2) ** 0.5
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        orig_li = orig_loop_idx
+                                except Exception:
+                                    continue
                         
                         m = loop_red(obj.data, L.mask_name, orig_li)
                         if m is None:
-                            orig_vi = vi % len(obj.data.vertices) if len(obj.data.vertices) > 0 else 0
-                            orig_vi = min(orig_vi, len(obj.data.vertices) - 1)
+                            # Fallback to vertex-based reading
+                            if vi < len(obj.data.vertices):
+                                orig_vi = vi
+                            else:
+                                # Find closest original vertex
+                                work_vert = work_mesh.vertices[vi].co
+                                min_dist = float('inf')
+                                orig_vi = 0
+                                for orig_vert_idx in range(len(obj.data.vertices)):
+                                    orig_vert = obj.data.vertices[orig_vert_idx].co
+                                    dist = (work_vert - orig_vert).length
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        orig_vi = orig_vert_idx
+                            
                             m = point_red(obj.data, L.mask_name, orig_vi) or 0.0
                     m_layer[i] = m
 
