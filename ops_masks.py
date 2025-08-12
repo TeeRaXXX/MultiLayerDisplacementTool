@@ -97,6 +97,23 @@ def _refresh_viewport_minimal(context=None):
     except Exception:
         pass
 
+def _refresh_viewport(context=None):
+    """Full viewport refresh with forced updates."""
+    ctx = context or bpy.context
+    try:
+        # Полное обновление viewport
+        for area in ctx.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+                # Принудительное обновление
+                for space in area.spaces:
+                    if space.type == 'VIEW_3D':
+                        space.shading.type = space.shading.type
+                        break
+                break
+    except Exception:
+        pass
+
 # --- Mask attribute management ---------------------------------------------
 
 def _ensure_mask_attr_fast(obj, name):

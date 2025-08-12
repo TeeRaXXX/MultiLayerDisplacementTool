@@ -25,7 +25,7 @@ def _polycount_str(obj: bpy.types.Object) -> str:
         orig_v, orig_f, orig_t = polycount(obj.data)
         
         # Evaluated mesh (with all modifiers) - force fresh calculation
-        eval_v, eval_f, eval_t = get_evaluated_polycount(obj)
+        eval_v, eval_f, eval_t = get_evaluated_polycount(obj, verbose=False)
         
         # If they're the same, show simple format
         if orig_v == eval_v and orig_f == eval_f:
@@ -78,7 +78,7 @@ def _get_detailed_polycount_info(obj: bpy.types.Object, s) -> list:
                     break
             
             if has_displacement:
-                eval_v, eval_f, eval_t = get_evaluated_polycount(obj)
+                eval_v, eval_f, eval_t = get_evaluated_polycount(obj, verbose=False)
                 if eval_t != current_tris:
                     current_tris = eval_t
                     pipeline_info.append(f"Disp: {eval_t:,}")
@@ -267,18 +267,18 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         # 2) Polycount with detailed info
         box = layout.box()
         
-        # Current polycount summary
-        row = box.row(align=True)
-        row.label(text=_polycount_str(obj), icon='MESH_DATA')
-        
         # Detailed polycount breakdown (compact)
         detailed_info = _get_detailed_polycount_info(obj, s)
         if len(detailed_info) > 0:
             col = box.column(align=True)
             col.scale_y = 0.8
             
-            for info_line in detailed_info:
-                col.label(text=info_line, icon='NONE')
+            # Show first line with icon, rest without
+            for i, info_line in enumerate(detailed_info):
+                if i == 0:
+                    col.label(text=info_line, icon='MESH_DATA')
+                else:
+                    col.label(text=info_line, icon='NONE')
         
         # Legacy info removed for cleaner UI
 

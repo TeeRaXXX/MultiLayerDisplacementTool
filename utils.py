@@ -17,7 +17,7 @@ def polycount(me: bpy.types.Mesh):
     except Exception:
         return 0, 0, 0
 
-def get_evaluated_polycount(obj: bpy.types.Object, context=None):
+def get_evaluated_polycount(obj: bpy.types.Object, context=None, verbose=False):
     """Get polycount of evaluated mesh (with modifiers applied)."""
     try:
         if context is None:
@@ -37,14 +37,16 @@ def get_evaluated_polycount(obj: bpy.types.Object, context=None):
         faces = len(eval_mesh.polygons) 
         tris = len(eval_mesh.loop_triangles)
         
-        print(f"[MLD] Evaluated polycount: V:{verts} F:{faces} T:{tris}")
+        if verbose:
+            print(f"[MLD] Evaluated polycount: V:{verts} F:{faces} T:{tris}")
         return verts, faces, tris
         
     except Exception as e:
-        print(f"[MLD] get_evaluated_polycount failed: {e}")
+        if verbose:
+            print(f"[MLD] get_evaluated_polycount failed: {e}")
         return 0, 0, 0
 
-def get_polycount_up_to_modifier(obj: bpy.types.Object, modifier_name: str, context=None):
+def get_polycount_up_to_modifier(obj: bpy.types.Object, modifier_name: str, context=None, verbose=False):
     """Get polycount with modifiers applied up to (but not including) specified modifier."""
     try:
         if context is None:
@@ -53,7 +55,7 @@ def get_polycount_up_to_modifier(obj: bpy.types.Object, modifier_name: str, cont
         # Find target modifier
         target_mod = obj.modifiers.get(modifier_name)
         if not target_mod:
-            return get_evaluated_polycount(obj, context)
+            return get_evaluated_polycount(obj, context, verbose)
         
         target_idx = obj.modifiers.find(modifier_name)
         
@@ -68,7 +70,7 @@ def get_polycount_up_to_modifier(obj: bpy.types.Object, modifier_name: str, cont
         context.view_layer.update()
         
         # Get polycount
-        result = get_evaluated_polycount(obj, context)
+        result = get_evaluated_polycount(obj, context, verbose)
         
         # Restore all modifier states
         for i, mod in enumerate(obj.modifiers):
@@ -77,11 +79,13 @@ def get_polycount_up_to_modifier(obj: bpy.types.Object, modifier_name: str, cont
         # Force update after restoring states
         context.view_layer.update()
         
-        print(f"[MLD] Polycount up to {modifier_name}: V:{result[0]} F:{result[1]} T:{result[2]}")
+        if verbose:
+            print(f"[MLD] Polycount up to {modifier_name}: V:{result[0]} F:{result[1]} T:{result[2]}")
         return result
         
     except Exception as e:
-        print(f"[MLD] get_polycount_up_to_modifier failed: {e}")
+        if verbose:
+            print(f"[MLD] get_polycount_up_to_modifier failed: {e}")
         return 0, 0, 0
 
 def format_polycount(verts, faces, tris):

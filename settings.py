@@ -6,6 +6,19 @@ from bpy.props import (
     BoolProperty, IntProperty, FloatProperty, StringProperty,
     EnumProperty, PointerProperty, CollectionProperty,
 )
+from .constants import (
+    # Default values
+    DEFAULT_ACTIVE_INDEX, DEFAULT_PAINTING, DEFAULT_VC_PACKED,
+    DEFAULT_STRENGTH, DEFAULT_MIDLEVEL, DEFAULT_FILL_POWER,
+    DEFAULT_SUBDIV_ENABLE, DEFAULT_SUBDIV_TYPE, DEFAULT_SUBDIV_VIEW, DEFAULT_SUBDIV_RENDER,
+    DEFAULT_AUTO_ASSIGN_MATERIALS, DEFAULT_MASK_THRESHOLD, DEFAULT_ASSIGN_THRESHOLD,
+    DEFAULT_PREVIEW_ENABLE, DEFAULT_PREVIEW_BLEND, DEFAULT_PREVIEW_MASK_INFLUENCE, DEFAULT_PREVIEW_CONTRAST,
+    DEFAULT_DECIMATE_ENABLE, DEFAULT_DECIMATE_RATIO,
+    DEFAULT_FILL_EMPTY_VC_WHITE,
+    DEFAULT_LAST_POLY_V, DEFAULT_LAST_POLY_F, DEFAULT_LAST_POLY_T,
+    DEFAULT_LAYER_ENABLED, DEFAULT_LAYER_NAME, DEFAULT_LAYER_MULTIPLIER, 
+    DEFAULT_LAYER_BIAS, DEFAULT_LAYER_TILING, DEFAULT_LAYER_MASK_NAME, DEFAULT_LAYER_VC_CHANNEL
+)
 
 # ------------------------------------------------------------------------------
 # Preview callbacks (ONLY build/remove preview material; do NOT touch displacement)
@@ -113,11 +126,11 @@ VC_ENUM = [
 
 class MLD_Layer(PropertyGroup):
     enabled: BoolProperty(
-        name="Enabled", default=True,
+        name="Enabled", default=DEFAULT_LAYER_ENABLED,
         description="Enable this layer in displacement and preview",
     )
     name: StringProperty(
-        name="Layer Name", default="New Layer",
+        name="Layer Name", default=DEFAULT_LAYER_NAME,
         description="Display name (UI). Will be replaced by Material name when set",
     )
     def _update_name_from_mat(self, context):
@@ -129,23 +142,23 @@ class MLD_Layer(PropertyGroup):
         update=_update_name_from_mat,
     )
     multiplier: FloatProperty(
-        name="Multiplier", default=1.0, soft_min=-8.0, soft_max=8.0,
+        name="Multiplier", default=DEFAULT_LAYER_MULTIPLIER, soft_min=-8.0, soft_max=8.0,
         description="Multiply sampled height (per-layer)",
     )
     bias: FloatProperty(
-        name="Bias", default=0.0, soft_min=-1.0, soft_max=1.0,
+        name="Bias", default=DEFAULT_LAYER_BIAS, soft_min=-1.0, soft_max=1.0,
         description="Add to sampled height (per-layer)",
     )
     tiling: FloatProperty(
-        name="Tiling", default=1.0, min=1e-6, soft_min=0.01, soft_max=32.0,
+        name="Tiling", default=DEFAULT_LAYER_TILING, min=1e-6, soft_min=0.01, soft_max=32.0,
         description="UV scale for this layer",
     )
     mask_name: StringProperty(
-        name="Mask Attribute", default="",
+        name="Mask Attribute", default=DEFAULT_LAYER_MASK_NAME,
         description="Vertex Color attribute name used as a mask (Red channel)",
     )
     vc_channel: EnumProperty(
-        name="VC Channel", items=VC_ENUM, default='NONE',
+        name="VC Channel", items=VC_ENUM, default=DEFAULT_LAYER_VC_CHANNEL,
         description="Pack this layer into chosen vertex color channel on Pack VC",
     )
 
@@ -235,22 +248,22 @@ def _set_mat_assign_threshold(self, v):
 class MLD_Settings(PropertyGroup):
     # UI / runtime with OPTIMIZED layer change callback
     active_index: IntProperty(
-        name="Active Layer", default=0, min=0,
+        name="Active Layer", default=DEFAULT_ACTIVE_INDEX, min=0,
         update=_on_active_layer_change
     )
-    painting: BoolProperty(name="Painting Mode", default=False)
+    painting: BoolProperty(name="Painting Mode", default=DEFAULT_PAINTING)
 
     # Global displacement parameters
     strength: FloatProperty(
-        name="Global Strength", default=0.10, soft_min=-5.0, soft_max=5.0,
+        name="Global Strength", default=DEFAULT_STRENGTH, soft_min=-5.0, soft_max=5.0,
         description="Overall displacement strength applied to the height result",
     )
     midlevel: FloatProperty(
-        name="Midlevel", default=0.50, min=0.0, max=1.0,
+        name="Midlevel", default=DEFAULT_MIDLEVEL, min=0.0, max=1.0,
         description="Reference midlevel (subtracted from blended height before strength)",
     )
     fill_power: FloatProperty(
-        name="Fill Power", default=1.0, min=0.0, soft_max=4.0,
+        name="Fill Power", default=DEFAULT_FILL_POWER, min=0.0, soft_max=4.0,
         description="Controls how aggressively higher layers 'fill' over lower layers",
     )
 
@@ -261,92 +274,92 @@ class MLD_Settings(PropertyGroup):
 
     # Subdivision refine (preview helper)
     subdiv_enable: BoolProperty(
-        name="Enable Subdivision Refine", default=True,
+        name="Enable Subdivision Refine", default=DEFAULT_SUBDIV_ENABLE,
         description="Enable Subdivision modifier (preview helper) - applied on Recalculate",
         # НЕТ update callback - изменения применяются только при Recalculate
     )
     subdiv_type: EnumProperty(
-        name="Type", items=SUBDIV_TYPES, default='SIMPLE',
+        name="Type", items=SUBDIV_TYPES, default=DEFAULT_SUBDIV_TYPE,
         description="Subdivision type for refine step",
         # НЕТ update callback
     )
     subdiv_view: IntProperty(
-        name="Viewport Levels", default=1, min=0, soft_max=4,
+        name="Viewport Levels", default=DEFAULT_SUBDIV_VIEW, min=0, soft_max=4,
         description="Subdivision levels in viewport",
         # НЕТ update callback
     )
     subdiv_render: IntProperty(
-        name="Render Levels", default=1, min=0, soft_max=4,
+        name="Render Levels", default=DEFAULT_SUBDIV_RENDER, min=0, soft_max=4,
         description="Subdivision levels in render",
         # НЕТ update callback
     )
 
     # Materials auto-assign after recalc
     auto_assign_materials: BoolProperty(
-        name="Auto assign on Recalculate", default=True,
+        name="Auto assign on Recalculate", default=DEFAULT_AUTO_ASSIGN_MATERIALS,
         description="Assign object polygons to layer materials using displacement result after Recalculate",
     )
     # Thresholds (two names kept for cross-module compatibility)
     mask_threshold: FloatProperty(
-        name="Mask Threshold", default=0.05, min=0.0, max=1.0,
+        name="Mask Threshold", default=DEFAULT_MASK_THRESHOLD, min=0.0, max=1.0,
         description="Minimum visible contribution to assign a polygon to layer's material",
     )
     assign_threshold: FloatProperty(
-        name="Assign Threshold (compat)", default=0.05, min=0.0, max=1.0,
+        name="Assign Threshold (compat)", default=DEFAULT_ASSIGN_THRESHOLD, min=0.0, max=1.0,
         description="Compatibility alias for modules that read a different property name",
     )
 
     # Preview (materials) — HeightLerp style
     preview_enable: BoolProperty(
-        name="Preview blend (materials)", default=False,
+        name="Preview blend (materials)", default=DEFAULT_PREVIEW_ENABLE,
         description="Build and assign a HeightLerp-like preview material for the object (applied on Recalculate)",
         update=_on_toggle_preview,  # Только toggle - включение/выключение
     )
     preview_blend: BoolProperty(
-        name="Simple Blend Mode", default=False,
+        name="Simple Blend Mode", default=DEFAULT_PREVIEW_BLEND,
         description="Use simple additive blend instead of HeightLerp (all layers visible)",
         update=_on_preview_param,  # Перестраиваем превью при изменении
     )
     preview_mask_influence: FloatProperty(
-        name="Preview Mask Influence", default=1.0, min=0.0, soft_max=2.0,
+        name="Preview Mask Influence", default=DEFAULT_PREVIEW_MASK_INFLUENCE, min=0.0, soft_max=2.0,
         description="How strongly paint mask affects preview blend",
         # НЕТ update callback - применяется при Recalculate
     )
     preview_contrast: FloatProperty(
-        name="Preview Contrast", default=2.0, min=0.0, soft_max=8.0,
+        name="Preview Contrast", default=DEFAULT_PREVIEW_CONTRAST, min=0.0, soft_max=8.0,
         description="How strongly height difference sharpens preview blend",
         # НЕТ update callback - применяется при Recalculate
     )
 
     # Decimate (preview)
     decimate_enable: BoolProperty(
-        name="Enable", default=False,
+        name="Enable", default=DEFAULT_DECIMATE_ENABLE,
         description="Enable decimate for preview (applied on Recalculate only)",
         # НЕТ update callback - изменения применяются только при Recalculate
     )
     decimate_ratio: FloatProperty(
-        name="Ratio", default=0.01, min=0.0, max=1.0,
+        name="Ratio", default=DEFAULT_DECIMATE_RATIO, min=0.0, max=1.0,
         description="Decimation ratio for preview mesh (smaller = stronger reduction)",
         # НЕТ update callback
     )
 
     # Pack Vertex Colors
     fill_empty_vc_white: BoolProperty(
-        name="Fill empty VC channels with white", default=False,
+        name="Fill empty VC channels with white", default=DEFAULT_FILL_EMPTY_VC_WHITE,
         description="When packing VC, fill unassigned channels with white (1.0). If all channels are used, this is ignored",
     )
     
     # Polycount tracking (for UI display)
     last_poly_v: IntProperty(
-        name="Last Vertex Count", default=0,
+        name="Last Vertex Count", default=DEFAULT_LAST_POLY_V,
         description="Last calculated vertex count (for UI display)",
     )
     last_poly_f: IntProperty(
-        name="Last Face Count", default=0,
+        name="Last Face Count", default=DEFAULT_LAST_POLY_F,
         description="Last calculated face count (for UI display)", 
     )
     last_poly_t: IntProperty(
-        name="Last Triangle Count", default=0,
+        name="Last Triangle Count", default=DEFAULT_LAST_POLY_T,
         description="Last calculated triangle count (for UI display)",
     )
 

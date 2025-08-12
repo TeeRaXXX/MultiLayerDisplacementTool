@@ -353,11 +353,11 @@ class MLD_OT_recalculate(bpy.types.Operator):
             
             # After displacement (before decimate)
             if decimate_md:
-                before_decimate_v, before_decimate_f, before_decimate_t = get_polycount_up_to_modifier(obj, DECIMATE_MOD_NAME, context)
+                before_decimate_v, before_decimate_f, before_decimate_t = get_polycount_up_to_modifier(obj, DECIMATE_MOD_NAME, context, verbose=True)
                 print(f"[MLD] Before decimate: {format_polycount(before_decimate_v, before_decimate_f, before_decimate_t)}")
             
             # Final result (all modifiers)
-            final_v, final_f, final_t = get_evaluated_polycount(obj, context)
+            final_v, final_f, final_t = get_evaluated_polycount(obj, context, verbose=True)
             print(f"[MLD] Final result: {format_polycount(final_v, final_f, final_t)}")
             
             if decimate_md:
