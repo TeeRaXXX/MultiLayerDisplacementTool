@@ -477,7 +477,7 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         # Pack button - only enabled if channels are assigned
         pack_row = col.row()
         pack_row.enabled = len(assigned_channels) > 0
-        _op(pack_row, "mld.pack_vcols", text="Pack to VC", icon='GROUP_VCOL')
+        _op(pack_row, "mld.pack_vcols", text="Pack to Vertex Colors", icon='GROUP_VCOL')
 
         # 12) Bake
         row = layout.row(align=True); row.enabled = not painting

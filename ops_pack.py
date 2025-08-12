@@ -11,12 +11,34 @@ def _any_channel_assigned(s):
     return any(getattr(L, 'vc_channel', 'NONE') in {'R','G','B','A'} for L in s.layers)
 
 def _pack_vc_now(obj, s):
-    """Pack selected channels per-loop into PACK_ATTR with proper error handling."""
+    """Pack selected channels per-loop into object's vertex colors with proper error handling."""
     me = obj.data
     
-    # Ensure target VC exists
-    pack_attr = ensure_color_attr(me, PACK_ATTR)
-    if not pack_attr:
+    # Get or create the main vertex color layer for the object
+    # Use the first available vertex color layer or create a new one
+    vc_layer = None
+    
+    # Try to find existing vertex color layer
+    if hasattr(me, "vertex_colors") and len(me.vertex_colors) > 0:
+        # Use the first VC layer, or try to find one with a specific name
+        for vc in me.vertex_colors:
+            if vc.name == "MLD_Packed" or vc.name == "Col":
+                vc_layer = vc
+                break
+        if not vc_layer:
+            vc_layer = me.vertex_colors[0]  # Use first VC layer
+        print(f"[MLD] Using existing vertex color layer: {vc_layer.name}")
+    else:
+        # Create new vertex color layer
+        try:
+            vc_layer = me.vertex_colors.new(name="MLD_Packed")
+            print(f"[MLD] Created new vertex color layer: {vc_layer.name}")
+        except Exception as e:
+            print(f"[MLD] Failed to create vertex color layer: {e}")
+            return False
+    
+    if not vc_layer:
+        print("[MLD] No vertex color layer available")
         return False
     
     nloops = len(me.loops)
@@ -60,14 +82,14 @@ def _pack_vc_now(obj, s):
             except Exception:
                 pass
 
-    # Write packed data to PACK_ATTR
+    # Write packed data to vertex color layer
     try:
         for li in range(nloops):
             r = per_loop['R'][li]
             g = per_loop['G'][li] 
             b = per_loop['B'][li]
             a = per_loop['A'][li]
-            pack_attr.data[li].color = (r, g, b, a)
+            vc_layer.data[li].color = (r, g, b, a)
         
         me.update()
         return True
@@ -79,7 +101,7 @@ def _pack_vc_now(obj, s):
 class MLD_OT_pack_vcols(Operator):
     bl_idname = "mld.pack_vcols"
     bl_label = "Pack Vertex Colors"
-    bl_description = "Pack per-layer masks into VC channels R/G/B/A"
+    bl_description = "Pack per-layer masks into object's vertex color channels R/G/B/A"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -110,7 +132,7 @@ class MLD_OT_pack_vcols(Operator):
                 layer_name = getattr(L, 'name', f'Layer {i+1}')
                 assignments.append(f"{ch}={layer_name}")
         
-        print(f"[MLD] Packing VC: {', '.join(assignments)}")
+        print(f"[MLD] Packing masks to vertex colors: {', '.join(assignments)}")
         
         # Perform packing
         success = _pack_vc_now(obj, s)
@@ -119,9 +141,14 @@ class MLD_OT_pack_vcols(Operator):
             # Mark as packed
             s.vc_packed = True
             
+            # Get the vertex color layer name for reporting
+            vc_layer_name = "vertex colors"
+            if hasattr(obj.data, "vertex_colors") and len(obj.data.vertex_colors) > 0:
+                vc_layer_name = obj.data.vertex_colors[0].name
+            
             # Report success
             pack_info = ', '.join(assignments)
-            self.report({'INFO'}, f"Packed to VC: {pack_info}")
+            self.report({'INFO'}, f"Packed to {vc_layer_name}: {pack_info}")
             return {'FINISHED'}
         else:
             self.report({'ERROR'}, "Failed to pack vertex colors.")
