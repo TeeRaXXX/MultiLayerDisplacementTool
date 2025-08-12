@@ -365,6 +365,7 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         col.prop(s, "preview_enable", text="Enable Preview")
         if getattr(s, "preview_enable", False):
             sub = col.column(align=True)
+            sub.prop(s, "preview_blend", text="Simple Blend Mode")
             sub.prop(s, "preview_mask_influence", text="Mask Influence")
             sub.prop(s, "preview_contrast", text="Contrast")
             

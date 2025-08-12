@@ -83,6 +83,12 @@ def _height_scalar(nodes, links, color_socket, mult: float, bias: float, loc=(0,
 
 def _mask_factor(nodes, links, mask_name: str, influence: float, y=0):
     """Read mask (vertex color Red), apply influence and STRICT_THR. Returns Value 0..1."""
+    if not mask_name or mask_name.strip() == "":
+        # Если маска не указана, возвращаем fallback значение (0.5 для видимости слоя)
+        fallback = nodes.new("ShaderNodeValue"); fallback.location = (-300, y)
+        fallback.outputs["Value"].default_value = 0.5
+        return fallback.outputs["Value"]
+    
     attr = nodes.new("ShaderNodeAttribute"); attr.location = (-300, y)
     attr.attribute_name = mask_name or ""
     sep = nodes.new("ShaderNodeSeparateRGB"); sep.location = (-160, y)
@@ -165,6 +171,8 @@ def build_heightlerp_preview_shader(obj: bpy.types.Object, s,
         Fac = saturate( Mask * Influence + (H_B - H_A) * Contrast )
         Color = lerp(A_Color, B_Color, Fac)
         H_accum = lerp(H_A, H_B, Fac)
+        
+    Alternative simple blend mode available via preview_blend setting.
     """
     if not obj or obj.type != 'MESH':
         return None
@@ -189,6 +197,9 @@ def build_heightlerp_preview_shader(obj: bpy.types.Object, s,
         _assign_preview_slot0(obj, mat)
         return mat
 
+    # Check if we should use simple blend mode
+    use_simple_blend = getattr(s, "preview_blend", False)
+
     # Create/clear preview material
     mat = _material_get_or_create(obj)
     nt = mat.node_tree; nodes, links = nt.nodes, nt.links
@@ -206,73 +217,123 @@ def build_heightlerp_preview_shader(obj: bpy.types.Object, s,
     layered_h   = None  # current blended scalar height
     y = 0
 
-    for idx, L in enumerate(layers):
-        base_img, h_img = _layer_images(L)
+    if use_simple_blend:
+        # Simple additive blend mode - all layers visible
+        for idx, L in enumerate(layers):
+            base_img, h_img = _layer_images(L)
 
-        # Color source for this layer
-        color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
-                               loc=(-260, y), non_color=False)
-        color_socket = color_node.outputs["Color"]
+            # Color source for this layer
+            color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
+                                   loc=(-260, y), non_color=False)
+            color_socket = color_node.outputs["Color"]
 
-        # Height source (Non-Color)
-        h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
-                           loc=(-260, y - 180), non_color=True)
-        h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
-                                  getattr(L, "multiplier", 1.0), getattr(L, "bias", 0.0),
-                                  loc=(-260, y - 180))
+            # Height source (Non-Color)
+            h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
+                               loc=(-260, y - 180), non_color=True)
+            h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
+                                      getattr(L, "multiplier", 1.0), getattr(L, "bias", 0.0),
+                                      loc=(-260, y - 180))
 
-        if layered_col is None:
-            # initialize with the bottom layer
-            layered_col = color_socket
-            layered_h   = h_scalar
-        else:
-            # Mask term (0..1), with hard override at STRICT_THR
-            fac_mask = _mask_factor(nodes, links, getattr(L, "mask_name", "") or "", infl, y=y - 40)
+            if layered_col is None:
+                # initialize with the first layer
+                layered_col = color_socket
+                layered_h   = h_scalar
+            else:
+                # Simple additive blend with mask influence
+                fac_mask = _mask_factor(nodes, links, getattr(L, "mask_name", "") or "", infl, y=y - 40)
+                
+                # Blend color: lerp(prev_color, this_color, Fac)
+                mix = nodes.new("ShaderNodeMixRGB"); mix.location = (480, y)
+                mix.blend_type = 'MIX'
+                links.new(fac_mask, mix.inputs["Fac"])
+                links.new(layered_col,            mix.inputs["Color1"])
+                links.new(color_socket,           mix.inputs["Color2"])
+                layered_col = mix.outputs["Color"]
 
-            # Height delta term: (H_B - H_A) * Contrast
-            sub = nodes.new("ShaderNodeMath"); sub.location = (160, y - 180); sub.operation = 'SUBTRACT'
-            links.new(h_scalar, sub.inputs[0])      # H_B
-            links.new(layered_h, sub.inputs[1])     # H_A
+                # Blend height: lerp(prev_height, this_height, Fac)
+                hmix = nodes.new("ShaderNodeMixRGB"); hmix.location = (480, y - 180)
+                hmix.blend_type = 'MIX'
+                links.new(fac_mask, hmix.inputs["Fac"])
+                links.new(layered_h, hmix.inputs["Color1"])
+                links.new(h_scalar, hmix.inputs["Color2"])
+                layered_h = hmix.outputs["Color"]
 
-            mulC = nodes.new("ShaderNodeMath"); mulC.location = (300, y - 180); mulC.operation = 'MULTIPLY'
-            mulC.inputs[1].default_value = float(contr)
-            links.new(sub.outputs["Value"], mulC.inputs[0])
+            y -= 260
+    else:
+        # Original HeightLerp blend mode
+        for idx, L in enumerate(layers):
+            base_img, h_img = _layer_images(L)
 
-            addm = nodes.new("ShaderNodeMath"); addm.location = (440, y - 120); addm.operation = 'ADD'
-            links.new(fac_mask, addm.inputs[0])
-            links.new(mulC.outputs["Value"], addm.inputs[1])
+            # Color source for this layer
+            color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
+                                   loc=(-260, y), non_color=False)
+            color_socket = color_node.outputs["Color"]
 
-            fac = nodes.new("ShaderNodeClamp"); fac.location = (580, y - 120)
-            links.new(addm.outputs["Value"], fac.inputs["Value"])
+            # Height source (Non-Color)
+            h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
+                               loc=(-260, y - 180), non_color=True)
+            h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
+                                      getattr(L, "multiplier", 1.0), getattr(L, "bias", 0.0),
+                                      loc=(-260, y - 180))
 
-            # Blend color: lerp(prev_color, this_color, Fac)
-            mix = nodes.new("ShaderNodeMixRGB"); mix.location = (480, y)
-            mix.blend_type = 'MIX'
-            links.new(fac.outputs["Result"], mix.inputs["Fac"])
-            links.new(layered_col,            mix.inputs["Color1"])
-            links.new(color_socket,           mix.inputs["Color2"])
-            layered_col = mix.outputs["Color"]
+            if layered_col is None:
+                # initialize with the bottom layer
+                layered_col = color_socket
+                layered_h   = h_scalar
+            else:
+                # Mask term (0..1), with hard override at STRICT_THR
+                fac_mask = _mask_factor(nodes, links, getattr(L, "mask_name", "") or "", infl, y=y - 40)
 
-            # Propagate height for next iteration: H = lerp(H_A, H_B, Fac)
-            inv = nodes.new("ShaderNodeMath"); inv.location = (440, y - 220); inv.operation = 'SUBTRACT'
-            inv.inputs[0].default_value = 1.0
-            links.new(fac.outputs["Result"], inv.inputs[1])
+                # Height delta term: (H_B - H_A) * Contrast
+                sub = nodes.new("ShaderNodeMath"); sub.location = (160, y - 180); sub.operation = 'SUBTRACT'
+                links.new(h_scalar, sub.inputs[0])      # H_B
+                links.new(layered_h, sub.inputs[1])     # H_A
 
-            aterm = nodes.new("ShaderNodeMath"); aterm.location = (600, y - 210); aterm.operation = 'MULTIPLY'
-            links.new(layered_h, aterm.inputs[0])
-            links.new(inv.outputs["Value"], aterm.inputs[1])
+                mulC = nodes.new("ShaderNodeMath"); mulC.location = (300, y - 180); mulC.operation = 'MULTIPLY'
+                mulC.inputs[1].default_value = float(contr)
+                links.new(sub.outputs["Value"], mulC.inputs[0])
 
-            bterm = nodes.new("ShaderNodeMath"); bterm.location = (740, y - 210); bterm.operation = 'MULTIPLY'
-            links.new(h_scalar, bterm.inputs[0])
-            links.new(fac.outputs["Result"], bterm.inputs[1])
+                # Combine mask and height influence with minimum visibility
+                addm = nodes.new("ShaderNodeMath"); addm.location = (440, y - 120); addm.operation = 'ADD'
+                links.new(fac_mask, addm.inputs[0])
+                links.new(mulC.outputs["Value"], addm.inputs[1])
 
-            hmix = nodes.new("ShaderNodeMath"); hmix.location = (880, y - 210); hmix.operation = 'ADD'
-            links.new(aterm.outputs["Value"], hmix.inputs[0])
-            links.new(bterm.outputs["Value"], hmix.inputs[1])
+                # Ensure minimum visibility for each layer (0.1 minimum factor)
+                max_node = nodes.new("ShaderNodeMath"); max_node.location = (520, y - 120); max_node.operation = 'MAXIMUM'
+                max_node.inputs[1].default_value = 0.1
+                links.new(addm.outputs["Value"], max_node.inputs[0])
 
-            layered_h = hmix.outputs.get("Result") or mix.outputs.get("Value") or mix.outputs[0]
+                fac = nodes.new("ShaderNodeClamp"); fac.location = (660, y - 120)
+                links.new(max_node.outputs["Value"], fac.inputs["Value"])
 
-        y -= 260
+                # Blend color: lerp(prev_color, this_color, Fac)
+                mix = nodes.new("ShaderNodeMixRGB"); mix.location = (560, y)
+                mix.blend_type = 'MIX'
+                links.new(fac.outputs["Result"], mix.inputs["Fac"])
+                links.new(layered_col,            mix.inputs["Color1"])
+                links.new(color_socket,           mix.inputs["Color2"])
+                layered_col = mix.outputs["Color"]
+
+                # Propagate height for next iteration: H = lerp(H_A, H_B, Fac)
+                inv = nodes.new("ShaderNodeMath"); inv.location = (520, y - 220); inv.operation = 'SUBTRACT'
+                inv.inputs[0].default_value = 1.0
+                links.new(fac.outputs["Result"], inv.inputs[1])
+
+                aterm = nodes.new("ShaderNodeMath"); aterm.location = (680, y - 210); aterm.operation = 'MULTIPLY'
+                links.new(layered_h, aterm.inputs[0])
+                links.new(inv.outputs["Value"], aterm.inputs[1])
+
+                bterm = nodes.new("ShaderNodeMath"); bterm.location = (820, y - 210); bterm.operation = 'MULTIPLY'
+                links.new(h_scalar, bterm.inputs[0])
+                links.new(fac.outputs["Result"], bterm.inputs[1])
+
+                hmix = nodes.new("ShaderNodeMath"); hmix.location = (960, y - 210); hmix.operation = 'ADD'
+                links.new(aterm.outputs["Value"], hmix.inputs[0])
+                links.new(bterm.outputs["Value"], hmix.inputs[1])
+
+                layered_h = hmix.outputs.get("Result") or mix.outputs.get("Value") or mix.outputs[0]
+
+            y -= 260
 
     # Drive BaseColor
     links.new(layered_col, bsdf.inputs["Base Color"])

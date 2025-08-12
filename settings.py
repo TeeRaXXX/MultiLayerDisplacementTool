@@ -302,6 +302,11 @@ class MLD_Settings(PropertyGroup):
         description="Build and assign a HeightLerp-like preview material for the object (applied on Recalculate)",
         update=_on_toggle_preview,  # Только toggle - включение/выключение
     )
+    preview_blend: BoolProperty(
+        name="Simple Blend Mode", default=False,
+        description="Use simple additive blend instead of HeightLerp (all layers visible)",
+        update=_on_preview_param,  # Перестраиваем превью при изменении
+    )
     preview_mask_influence: FloatProperty(
         name="Preview Mask Influence", default=1.0, min=0.0, soft_max=2.0,
         description="How strongly paint mask affects preview blend",
