@@ -1,4 +1,4 @@
-# ui.py — UI Panel for Multi Layer Displacement Tool
+# ui.py — UI Panel for Multi Layer Displacement Tool (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 from __future__ import annotations
 import bpy
 from bpy.props import IntProperty
@@ -6,27 +6,61 @@ from bpy.props import IntProperty
 # ----------------- helpers ----------------------------------------------------
 
 def _s(obj):
+    """Get MLD settings with safe fallback."""
     if obj and getattr(obj, "mld_settings", None):
         return obj.mld_settings
-    return getattr(bpy.context.scene, "mld_settings", None)
+    scene_settings = getattr(bpy.context.scene, "mld_settings", None)
+    return scene_settings
+
+def _safe_layers(s):
+    """Get layers safely with fallback to empty list."""
+    if not s:
+        return []
+    try:
+        return list(getattr(s, "layers", []))
+    except Exception:
+        return []
 
 def _is_painting(s) -> bool:
     return bool(getattr(s, "is_painting", getattr(s, "painting", False)))
 
 def _active_idx(s) -> int:
-    return int(getattr(s, "active_layer_index", getattr(s, "active_index", 0)))
+    """Get active layer index safely."""
+    if not s:
+        return 0
+    try:
+        return int(getattr(s, "active_layer_index", getattr(s, "active_index", 0)))
+    except Exception:
+        return 0
 
 def _polycount_str(obj: bpy.types.Object) -> str:
+    """Get comprehensive polycount info with evaluated mesh."""
     try:
-        me = obj.data
-        if not me:
-            return "—"
-        if not me.loop_triangles:
-            me.calc_loop_triangles()
-        return f"Tris: {len(me.loop_triangles):,}"
+        from .utils import polycount, get_evaluated_polycount, format_polycount
+        
+        # Original mesh
+        orig_v, orig_f, orig_t = polycount(obj.data)
+        
+        # Evaluated mesh (with all modifiers) - force fresh calculation
+        eval_v, eval_f, eval_t = get_evaluated_polycount(obj)
+        
+        # If they're the same, show simple format
+        if orig_v == eval_v and orig_f == eval_f:
+            return f"Tris: {orig_t:,}"
+        else:
+            # Show both original and final
+            multiplier = eval_t / orig_t if orig_t > 0 else 1.0
+            if multiplier > 1.1:  # Show multiplier if significant increase
+                return f"Orig: {orig_t:,}T → Final: {eval_t:,}T ({multiplier:.1f}x)"
+            else:
+                return f"Orig: {orig_t:,}T → Final: {eval_t:,}T"
+            
     except Exception:
         try:
-            return f"Faces: {len(obj.data.polygons):,}"
+            # Fallback to simple count
+            if not obj.data.loop_triangles:
+                obj.data.calc_loop_triangles()
+            return f"Tris: {len(obj.data.loop_triangles):,}"
         except Exception:
             return "—"
 
@@ -82,12 +116,17 @@ class MLD_OT_ui_set_active(bpy.types.Operator):
         s = _s(context.object)
         if not s:
             return {'CANCELLED'}
-        if 0 <= self.index < len(s.layers):
+        
+        layers = _safe_layers(s)
+        if 0 <= self.index < len(layers):
             # old/new names compatibility
-            if hasattr(s, "active_layer_index"):
-                s.active_layer_index = self.index
-            elif hasattr(s, "active_index"):
-                s.active_index = self.index
+            try:
+                if hasattr(s, "active_layer_index"):
+                    s.active_layer_index = self.index
+                elif hasattr(s, "active_index"):
+                    s.active_index = self.index
+            except Exception:
+                pass
         return {'FINISHED'}
 
 # ----------------- validation drawer -----------------------------------------
@@ -97,6 +136,7 @@ def _draw_validation(layout, context, s):
     row = box.row(align=True); row.label(text="Validation", icon='INFO')
     try:
         from .validation import collect_validation
+        obj = context.object
         msgs = collect_validation(obj) or []
         if not msgs:
             box.label(text="No issues found.", icon='CHECKMARK')
@@ -109,81 +149,20 @@ def _draw_validation(layout, context, s):
 
 # ----------------- layer row --------------------------------------------------
 
-def _draw_layer_row(ui, layout, s, idx: int, active_idx: int, painting: bool):
-    L = s.layers[idx]
-    row = layout.row(align=True)
-
-    # Blue select button for active layer (no radio buttons)
-    sel = (idx == active_idx)
-    bsel = row.operator("mld.ui_set_active", text=L.name or f"Layer {idx+1}")
-    bsel.index = idx
-    
-    # Make active layer button blue
-    if sel:
-        bsel_row = row.row()
-        bsel_row.alert = True  # This makes it red unfortunately, we'll use a different approach
-    
-    # Alternative: use emboss for active layer
-    if sel:
-        row.separator()
-        # Add a small indicator
-        indicator = row.row(align=True)
-        indicator.scale_x = 0.3
-        indicator.label(text="●", icon='NONE')
-
-    # enable toggle
-    row.prop(L, "enabled", text="")
-
-    # material
-    sub = row.row(align=True); sub.enabled = not painting
-    sub.prop(L, "material", text="")
-
-    # VC channel
-    sub = row.row(align=True); sub.enabled = not painting
-    if getattr(L, "vc_channel", 'NONE') == 'NONE':
-        op = _op(sub, "mld.set_layer_channel", text="Set VC", icon='GROUP_VCOL')
-        _set(op, layer_index=idx, index=idx)
-    else:
-        sub.label(text=L.vc_channel, icon='GROUP_VCOL')
-        op = _op(sub, "mld.clear_layer_channel", text="", icon='X')
-        _set(op, layer_index=idx, index=idx)
-
-    # up / down / remove
-    sub = row.row(align=True); sub.enabled = not painting
-    op = _op(sub, "mld.move_layer", text="", icon='TRIA_UP');    _set(op, layer_index=idx, index=idx, direction='UP')
-    op = _op(sub, "mld.move_layer", text="", icon='TRIA_DOWN');  _set(op, layer_index=idx, index=idx, direction='DOWN')
-    op = _op(sub, "mld.remove_layer", text="", icon='X');        _set(op, layer_index=idx, index=idx)
-
-# Custom draw method for active layer button with blue color
-def _draw_active_layer_button(layout, s, idx: int, active_idx: int, L):
-    """Draw layer selection button with blue highlight for active layer."""
-    sel = (idx == active_idx)
-    
-    if sel:
-        # Create a blue background using a box
-        blue_box = layout.box()
-        # Try to make it blue-ish by using different UI elements
-        blue_row = blue_box.row(align=True)
-        blue_row.scale_y = 0.8
-        bsel = blue_row.operator("mld.ui_set_active", text=f"► {L.name or f'Layer {idx+1}'}")
-        bsel.index = idx
-        return blue_row
-    else:
-        # Normal button for non-active layers
-        bsel = layout.operator("mld.ui_set_active", text=L.name or f"Layer {idx+1}")
-        bsel.index = idx
-        return layout
-
 def _draw_layer_row_improved(ui, layout, s, idx: int, active_idx: int, painting: bool):
-    """Improved layer row with blue active layer indication."""
-    L = s.layers[idx]
+    """Layer row with active layer indication and smart arrows."""
+    layers = _safe_layers(s)
+    if idx >= len(layers):
+        return
+        
+    L = layers[idx]
     row = layout.row(align=True)
     
-    # Active layer button (blue highlight)
+    # Active layer button
     sel = (idx == active_idx)
     if sel:
-        # Use a colored row/box for active layer
-        button_layout = row.box() if sel else row
+        # Use a colored row for active layer
+        button_layout = row.box()
         bsel = button_layout.operator("mld.ui_set_active", text=f"● {L.name or f'Layer {idx+1}'}")
     else:
         bsel = row.operator("mld.ui_set_active", text=L.name or f"Layer {idx+1}")
@@ -206,11 +185,22 @@ def _draw_layer_row_improved(ui, layout, s, idx: int, active_idx: int, painting:
         op = _op(sub, "mld.clear_layer_channel", text="", icon='X')
         _set(op, layer_index=idx, index=idx)
 
-    # up / down / remove
+    # Smart up / down / remove arrows
     sub = row.row(align=True); sub.enabled = not painting
-    op = _op(sub, "mld.move_layer", text="", icon='TRIA_UP');    _set(op, layer_index=idx, index=idx, direction='UP')
-    op = _op(sub, "mld.move_layer", text="", icon='TRIA_DOWN');  _set(op, layer_index=idx, index=idx, direction='DOWN')
-    op = _op(sub, "mld.remove_layer", text="", icon='X');        _set(op, layer_index=idx, index=idx)
+    
+    # Up arrow - disabled for top layer (index 0)
+    up_row = sub.row(); up_row.enabled = (idx > 0)
+    op = _op(up_row, "mld.move_layer", text="", icon='TRIA_UP')
+    _set(op, layer_index=idx, index=idx, direction='UP')
+    
+    # Down arrow - disabled for bottom layer (last index)
+    down_row = sub.row(); down_row.enabled = (idx < len(layers) - 1)
+    op = _op(down_row, "mld.move_layer", text="", icon='TRIA_DOWN')
+    _set(op, layer_index=idx, index=idx, direction='DOWN')
+    
+    # Remove button - always enabled
+    op = _op(sub, "mld.remove_layer", text="", icon='X')
+    _set(op, layer_index=idx, index=idx)
 
 # ----------------- main panel -------------------------------------------------
 
@@ -242,9 +232,28 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         _op(sub, "mld.paste_settings", text="Paste", icon='PASTEDOWN')
         _op(sub, "mld.reset_all",      text="Reset All", icon='TRASH')
 
-        # 2) Polycount
-        row = layout.row(align=True)
+        # 2) Polycount with detailed info
+        box = layout.box()
+        
+        # Current polycount
+        row = box.row(align=True)
         row.label(text=_polycount_str(obj), icon='MESH_DATA')
+        
+        # Additional info if available
+        if hasattr(s, 'last_poly_v') and s.last_poly_v > 0:
+            col = box.column(align=True)
+            col.scale_y = 0.8
+            
+            # Subdivision info
+            if getattr(s, "subdiv_enable", False):
+                subdiv_levels = getattr(s, "subdiv_view", 1)
+                if subdiv_levels > 0:
+                    col.label(text=f"Subdivision: {subdiv_levels} levels", icon='MOD_SUBSURF')
+            
+            # Decimate info  
+            if getattr(s, "decimate_enable", False):
+                decimate_ratio = getattr(s, "decimate_ratio", 0.5)
+                col.label(text=f"Decimate: {decimate_ratio:.1%} ratio", icon='MOD_DECIM')
 
         # 3) Global parameters
         box = layout.box()
@@ -261,18 +270,19 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         r = header.row(align=True); r.enabled = not painting
         _op(r, "mld.add_layer", text="", icon='ADD')
 
-        has_layers = len(s.layers) > 0
+        layers = _safe_layers(s)
+        has_layers = len(layers) > 0
         ai = _active_idx(s)
         
         if has_layers:
-            for i in range(len(s.layers)):
+            for i in range(len(layers)):
                 _draw_layer_row_improved(self, box, s, i, ai, painting)
         else:
             box.label(text="No layers yet. Click + to add.", icon='INFO')
 
         # 5) Active layer settings
-        ai = max(0, min(ai, len(s.layers)-1)) if has_layers else -1
-        L = s.layers[ai] if has_layers else None
+        ai = max(0, min(ai, len(layers)-1)) if has_layers else -1
+        L = layers[ai] if has_layers and 0 <= ai < len(layers) else None
         box = layout.box()
         box.label(text="Active Layer Settings")
         if L:
@@ -284,23 +294,23 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         else:
             box.label(text="Select a layer.", icon='BLANK1')
 
-        # 6) Mask tools - always show if we have any layers
+        # 6) Mask tools - show if we have any layers
         if has_layers:
             box = layout.box()
             box.label(text="Mask Paint")
             
-            # Paint Mask button - always enabled when we have layers, dynamic text
+            # Paint Mask button - automatically creates mask on first use
             row = box.row(align=True)
-            row.enabled = bool(has_layers)
             paint_text = "Stop Painting" if painting else "Paint Mask"
-            row.operator('mld.toggle_paint', text=paint_text, icon='BRUSH_DATA')
+            paint_icon = 'BRUSH_DATA' if not painting else 'X'
+            row.operator('mld.toggle_paint', text=paint_text, icon=paint_icon)
 
             # Fill buttons - only active during painting
             sub = box.row(align=True)
             sub.enabled = painting
-            op1 = sub.operator('mld.fill_mask', text='Fill 0%')
+            op1 = sub.operator('mld.fill_mask', text='0% (Black)')
             if op1: op1.mode = 'ZERO'
-            op2 = sub.operator('mld.fill_mask', text='Fill 100%') 
+            op2 = sub.operator('mld.fill_mask', text='100% (Red)') 
             if op2: op2.mode = 'ONE'
 
             # Blur/Sharpen row - only active during painting
@@ -309,10 +319,15 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             sub.operator("mld.blur_mask", text="Blur", icon='MOD_SMOOTH')
             sub.operator("mld.sharpen_mask", text="Sharpen", icon='MOD_EDGESPLIT')
 
-            # Clipboard row - only active during painting
-            sub = box.row(align=True); sub.enabled = painting and bool(has_layers)
-            sub.operator("mld.copy_mask",  text="Copy",  icon='COPYDOWN')
+            # Clipboard operations - only active during painting
+            sub = box.row(align=True)
+            sub.enabled = painting
+            sub.operator("mld.copy_mask", text="Copy", icon='COPYDOWN')
             sub.operator("mld.paste_mask", text="Paste", icon='PASTEDOWN')
+            
+            # Advanced clipboard operations
+            sub = box.row(align=True)
+            sub.enabled = painting
             sub.operator("mld.add_mask_from_clip", text="Add", icon='ADD')
             sub.operator("mld.sub_mask_from_clip", text="Sub", icon='REMOVE')
             sub.operator("mld.invert_mask", text="Invert", icon='ARROW_LEFTRIGHT')
@@ -336,43 +351,101 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         # 8) Subdivision refine
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
-        col.label(text="Refine (Subdivision)")
+        
+        # Header with info
+        header = col.row(align=True)
+        header.label(text="Refine (Subdivision)", icon='MOD_SUBSURF')
+        info_button = header.row()
+        info_button.scale_x = 0.5
+        info_button.label(text="📝", icon='NONE')  # Indicates changes applied on Recalculate
+        
         col.prop(s, "subdiv_enable", text="Enable")
-        row = col.row(align=True)
-        row.prop(s, "subdiv_type", text="Type")
-        row = col.row(align=True)
-        row.prop(s, "subdiv_view", text="Viewport Levels")
-        row.prop(s, "subdiv_render", text="Render Levels")
+        if getattr(s, "subdiv_enable", False):
+            row = col.row(align=True)
+            row.prop(s, "subdiv_type", text="")
+            row = col.row(align=True)
+            row.prop(s, "subdiv_view", text="Viewport")
+            row.prop(s, "subdiv_render", text="Render")
+            
+            # Subtle hint
+            hint = col.row()
+            hint.scale_y = 0.7
+            hint.label(text="Applied on Recalculate", icon='INFO')
 
         # 9) Materials + Preview
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
-        col.label(text="Materials by displacement")
+        col.label(text="Materials Assignment")
         col.prop(s, "auto_assign_materials", text="Auto assign on Recalculate")
-        col.prop(s, "mask_threshold", text="Assign Threshold")
-        _op(col, "mld.assign_materials_from_disp", text="Assign Materials", icon='MATERIAL')
+        col.prop(s, "mask_threshold", text="Assignment Threshold")
+        _op(col, "mld.assign_materials_from_disp", text="Assign Now", icon='MATERIAL')
 
         col.separator()
-        col.label(text="Preview blend (materials)")
-        col.prop(s, "preview_enable", text="Enable")
-        sub = col.column(align=True); sub.enabled = bool(getattr(s, "preview_enable", False))
-        sub.prop(s, "preview_mask_influence")
-        sub.prop(s, "preview_contrast")
+        
+        # Preview header with info
+        header = col.row(align=True)
+        header.label(text="Preview Materials", icon='MATERIAL')
+        info_button = header.row()
+        info_button.scale_x = 0.5
+        info_button.label(text="📝", icon='NONE')  # Indicates changes applied on Recalculate
+        
+        col.prop(s, "preview_enable", text="Enable Preview")
+        if getattr(s, "preview_enable", False):
+            sub = col.column(align=True)
+            sub.prop(s, "preview_mask_influence", text="Mask Influence")
+            sub.prop(s, "preview_contrast", text="Contrast")
+            
+            # Subtle hint
+            hint = sub.row()
+            hint.scale_y = 0.7
+            hint.label(text="Parameters applied on Recalculate", icon='INFO')
 
-        # 10) Decimate (preview after GN)
+        # 10) Decimate (preview)
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
-        col.label(text="Decimate (preview after GN)")
+        
+        # Header with info
+        header = col.row(align=True)
+        header.label(text="Decimate (preview)", icon='MOD_DECIM')
+        info_button = header.row()
+        info_button.scale_x = 0.5
+        info_button.label(text="📝", icon='NONE')  # Indicates changes applied on Recalculate
+        
         col.prop(s, "decimate_enable", text="Enable")
-        sub = col.row(align=True); sub.enabled = bool(getattr(s, "decimate_enable", False))
-        sub.prop(s, "decimate_ratio", text="Ratio")
+        if getattr(s, "decimate_enable", False):
+            sub = col.row(align=True)
+            sub.prop(s, "decimate_ratio", text="Ratio")
+            
+            # Subtle hint
+            hint = col.row()
+            hint.scale_y = 0.7
+            hint.label(text="Applied on Recalculate", icon='INFO')
 
         # 11) Pack Vertex Colors
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         col.label(text="Pack Vertex Colors")
-        col.prop(s, "fill_empty_vc_white")
-        _op(col, "mld.pack_vcols", text="Pack to VC", icon='GROUP_VCOL')
+        
+        # Show which channels are assigned
+        layers = _safe_layers(s)
+        assigned_channels = []
+        for L in layers:
+            ch = getattr(L, "vc_channel", 'NONE')
+            if ch in ['R', 'G', 'B', 'A']:
+                assigned_channels.append(ch)
+        
+        if assigned_channels:
+            info_text = f"Assigned: {', '.join(sorted(assigned_channels))}"
+            col.label(text=info_text, icon='INFO')
+        else:
+            col.label(text="No channels assigned", icon='ERROR')
+        
+        col.prop(s, "fill_empty_vc_white", text="Fill empty with white")
+        
+        # Pack button - only enabled if channels are assigned
+        pack_row = col.row()
+        pack_row.enabled = len(assigned_channels) > 0
+        _op(pack_row, "mld.pack_vcols", text="Pack to VC", icon='GROUP_VCOL')
 
         # 12) Bake
         row = layout.row(align=True); row.enabled = not painting

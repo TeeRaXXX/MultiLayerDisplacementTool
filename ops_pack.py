@@ -1,64 +1,139 @@
-# Pack selected layers' masks into a single Vertex Color (R/G/B/A)
+# ops_pack.py - ИСПРАВЛЕННАЯ ВЕРСИЯ для Pack Vertex Colors
+
 import bpy
 from bpy.types import Operator
 from .utils import active_obj
-from .attrs import (
-    ensure_color_attr, color_attr_exists, loop_red
-)
+from .attrs import ensure_color_attr, color_attr_exists, loop_red
 from .constants import PACK_ATTR
+
+def _any_channel_assigned(s):
+    """Check if any layer has a VC channel assigned."""
+    return any(getattr(L, 'vc_channel', 'NONE') in {'R','G','B','A'} for L in s.layers)
+
+def _pack_vc_now(obj, s):
+    """Pack selected channels per-loop into PACK_ATTR with proper error handling."""
+    me = obj.data
+    
+    # Ensure target VC exists
+    pack_attr = ensure_color_attr(me, PACK_ATTR)
+    if not pack_attr:
+        return False
+    
+    nloops = len(me.loops)
+    
+    # Build per-channel assignments
+    chan_map = {'R': None, 'G': None, 'B': None, 'A': None}
+    for i, L in enumerate(s.layers):
+        ch = getattr(L, 'vc_channel', 'NONE')
+        if ch in chan_map and chan_map[ch] is None:
+            chan_map[ch] = i
+
+    # Default fill value
+    default_fill = 1.0 if getattr(s, 'fill_empty_vc_white', False) else 0.0
+    
+    # Build per-loop arrays
+    per_loop = {
+        'R': [default_fill] * nloops, 
+        'G': [default_fill] * nloops, 
+        'B': [default_fill] * nloops, 
+        'A': [1.0] * nloops  # Alpha always 1.0
+    }
+
+    # Fill assigned channels from mask data
+    for ch, layer_idx in chan_map.items():
+        if layer_idx is None:
+            continue  # Use default fill
+            
+        L = s.layers[layer_idx]
+        mask_name = getattr(L, 'mask_name', '')
+        
+        if not mask_name or not color_attr_exists(me, mask_name):
+            print(f"[MLD] Warning: Layer {layer_idx} channel {ch} has no mask: {mask_name}")
+            continue
+        
+        # Read mask data (red channel)
+        for li in range(nloops):
+            try:
+                mask_value = loop_red(me, mask_name, li)
+                if mask_value is not None:
+                    per_loop[ch][li] = float(mask_value)
+            except Exception:
+                pass
+
+    # Write packed data to PACK_ATTR
+    try:
+        for li in range(nloops):
+            r = per_loop['R'][li]
+            g = per_loop['G'][li] 
+            b = per_loop['B'][li]
+            a = per_loop['A'][li]
+            pack_attr.data[li].color = (r, g, b, a)
+        
+        me.update()
+        return True
+        
+    except Exception as e:
+        print(f"[MLD] Pack VC failed: {e}")
+        return False
 
 class MLD_OT_pack_vcols(Operator):
     bl_idname = "mld.pack_vcols"
     bl_label = "Pack Vertex Colors"
-    bl_description = "Pack per-layer mask (vertex-averaged) into VC channels R/G/B/A"
+    bl_description = "Pack per-layer masks into VC channels R/G/B/A"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = active_obj(context)
+        if not obj or obj.type != 'MESH':
+            return False
+        s = getattr(obj, 'mld_settings', None)
+        return s and _any_channel_assigned(s)
 
     def execute(self, context):
-        obj=active_obj(context)
-        if not obj or obj.type!='MESH': return {'CANCELLED'}
-        s=obj.mld_settings
-        me=obj.data
-
-        # ensure target VC
-        ensure_color_attr(me, PACK_ATTR)
-        # build loop arrays per channel
-        Ls=list(s.layers)
-        chan_map={'R':None,'G':None,'B':None,'A':None}
-        for i,L in enumerate(Ls):
-            ch=L.vc_channel
-            if ch in chan_map and chan_map[ch] is None:
-                chan_map[ch]=i
-
-        # average loop→vertex per channel
-        nv=len(me.vertices); nloops=len(me.loops)
-        per_loop={'R':[0.0]*nloops, 'G':[0.0]*nloops, 'B':[0.0]*nloops, 'A':[0.0]*nloops}
-        for ch, idx in chan_map.items():
-            if idx is None:  # fill zeros if not assigned
-                continue
-            L=Ls[idx]
-            if not L.mask_name or not color_attr_exists(me, L.mask_name):
-                continue
-            for li in range(nloops):
-                per_loop[ch][li]=loop_red(me, L.mask_name, li)
-
-        # write into PACK_ATTR (corner domain)
-        if hasattr(me, "color_attributes"):
-            attr = me.color_attributes.get(PACK_ATTR)
-            for li in range(nloops):
-                r=per_loop['R'][li]; g=per_loop['G'][li]; b=per_loop['B'][li]; a=per_loop['A'][li]
-                attr.data[li].color=(r,g,b,a if a>0.0 else 1.0)
+        obj = active_obj(context)
+        if not obj or obj.type != 'MESH':
+            return {'CANCELLED'}
+        
+        s = obj.mld_settings
+        
+        # Check assignments
+        if not _any_channel_assigned(s):
+            self.report({'ERROR'}, "No VC channels assigned. Set channels in layer settings first.")
+            return {'CANCELLED'}
+        
+        # Show what will be packed
+        assignments = []
+        for i, L in enumerate(s.layers):
+            ch = getattr(L, 'vc_channel', 'NONE')
+            if ch in ['R', 'G', 'B', 'A']:
+                layer_name = getattr(L, 'name', f'Layer {i+1}')
+                assignments.append(f"{ch}={layer_name}")
+        
+        print(f"[MLD] Packing VC: {', '.join(assignments)}")
+        
+        # Perform packing
+        success = _pack_vc_now(obj, s)
+        
+        if success:
+            # Mark as packed
+            s.vc_packed = True
+            
+            # Report success
+            pack_info = ', '.join(assignments)
+            self.report({'INFO'}, f"Packed to VC: {pack_info}")
+            return {'FINISHED'}
         else:
-            vcol = me.vertex_colors.get(PACK_ATTR)
-            for li in range(nloops):
-                r=per_loop['R'][li]; g=per_loop['G'][li]; b=per_loop['B'][li]; a=per_loop['A'][li]
-                vcol.data[li].color=(r,g,b,a if a>0.0 else 1.0)
+            self.report({'ERROR'}, "Failed to pack vertex colors.")
+            return {'CANCELLED'}
 
-        me.update()
-        s.vc_packed=True
-        self.report({'INFO'},"Packed to VC.")
-        return {'FINISHED'}
+# Register/Unregister
+classes = (MLD_OT_pack_vcols,)
 
-classes=(MLD_OT_pack_vcols,)
 def register():
-    for c in classes: bpy.utils.register_class(c)
+    for c in classes: 
+        bpy.utils.register_class(c)
+
 def unregister():
-    for c in reversed(classes): bpy.utils.unregister_class(c)
+    for c in reversed(classes): 
+        bpy.utils.unregister_class(c)

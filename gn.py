@@ -1,4 +1,5 @@
-# gn.py — Geometry Nodes graph: displace ALONG NORMAL using OFFS.z as scalar
+# gn.py — Geometry Nodes граф для чтения displacement из carrier mesh
+
 from __future__ import annotations
 import bpy
 from .constants import OFFS_ATTR, GN_MOD_NAME
@@ -8,30 +9,95 @@ def _make_group_interface_45(ng: bpy.types.NodeTree):
     iface.new_socket(name="Geometry", in_out='INPUT',  socket_type='NodeSocketGeometry')
     iface.new_socket(name="Geometry", in_out='OUTPUT', socket_type='NodeSocketGeometry')
 
-def _build_group_nodes_min(ng: bpy.types.NodeTree):
+def _build_carrier_reader_graph(ng: bpy.types.NodeTree, obj: bpy.types.Object):
+    """Build GN graph that reads displacement from carrier mesh."""
+    nodes, links = ng.nodes, ng.links
+    nodes.clear()
+
+    # Input/Output
+    n_in  = nodes.new("NodeGroupInput");        n_in.location  = (-800,   0)
+    n_out = nodes.new("NodeGroupOutput");       n_out.location = ( 800,   0)
+
+    # Object Info node to read carrier mesh
+    n_obj_info = nodes.new("GeometryNodeObjectInfo"); n_obj_info.location = (-600, -200)
+    n_obj_info.transform_space = 'ORIGINAL'
+    
+    # Set carrier object
+    carrier_name = f"MLD_Carrier::{obj.name}"
+    carrier_obj = bpy.data.objects.get(carrier_name)
+    if carrier_obj:
+        n_obj_info.inputs["Object"].default_value = carrier_obj
+        print(f"[MLD] GN linked to carrier: {carrier_name}")
+
+    # Sample Index node to transfer vertex data
+    n_sample_index = nodes.new("GeometryNodeSampleIndex"); n_sample_index.location = (-400, 0)
+    n_sample_index.data_type = 'FLOAT_VECTOR'
+    n_sample_index.domain = 'POINT'
+
+    # Named attribute for OFFS on carrier
+    n_named = nodes.new("GeometryNodeInputNamedAttribute"); n_named.location = (-600, -400)
+    n_named.data_type = 'FLOAT_VECTOR'
+    n_named.inputs["Name"].default_value = OFFS_ATTR
+
+    # Index node for vertex indices
+    n_index = nodes.new("GeometryNodeInputIndex"); n_index.location = (-600, -100)
+
+    # Separate XYZ to get Z component (scalar displacement)
+    n_sep = nodes.new("ShaderNodeSeparateXYZ"); n_sep.location = (-200, 0)
+
+    # Normal input
+    n_normal = nodes.new("GeometryNodeInputNormal"); n_normal.location = (-200, 200)
+
+    # Vector Math to scale normal by displacement
+    n_vmath = nodes.new("ShaderNodeVectorMath"); n_vmath.location = (0, 100)
+    n_vmath.operation = 'SCALE'
+
+    # Set Position to apply displacement
+    n_set = nodes.new("GeometryNodeSetPosition"); n_set.location = (400, 0)
+
+    # Connections
+    links.new(n_in.outputs["Geometry"], n_set.inputs["Geometry"])
+    links.new(n_in.outputs["Geometry"], n_sample_index.inputs["Geometry"])
+    
+    # Connect carrier geometry and attributes
+    links.new(n_obj_info.outputs["Geometry"], n_sample_index.inputs["Geometry"])
+    links.new(n_named.outputs["Attribute"], n_sample_index.inputs["Value"])
+    links.new(n_index.outputs["Index"], n_sample_index.inputs["Index"])
+    
+    # Process displacement
+    links.new(n_sample_index.outputs["Value"], n_sep.inputs["Vector"])
+    links.new(n_sep.outputs["Z"], n_vmath.inputs["Scale"])
+    links.new(n_normal.outputs["Normal"], n_vmath.inputs["Vector"])
+    links.new(n_vmath.outputs["Vector"], n_set.inputs["Offset"])
+    
+    # Output
+    links.new(n_set.outputs["Geometry"], n_out.inputs["Geometry"])
+
+def _build_simple_graph(ng: bpy.types.NodeTree):
+    """Fallback simple graph if carrier not available."""
     nodes, links = ng.nodes, ng.links
     nodes.clear()
 
     n_in  = nodes.new("NodeGroupInput");        n_in.location  = (-600,   0)
     n_out = nodes.new("NodeGroupOutput");       n_out.location = ( 500,   0)
 
-    # Named attribute with our vector OFFS (we store scalar in Z)
+    # Named attribute with OFFS from object itself
     n_named = nodes.new("GeometryNodeInputNamedAttribute"); n_named.location = (-380, -140)
     n_named.data_type = 'FLOAT_VECTOR'
     n_named.inputs["Name"].default_value = OFFS_ATTR
 
-    # Separate OFFS to extract Z scalar
-    n_sep = nodes.new("ShaderNodeSeparateXYZ");            n_sep.location   = (-160, -140)
+    # Separate XYZ
+    n_sep = nodes.new("ShaderNodeSeparateXYZ"); n_sep.location = (-160, -140)
 
     # Normal → scale by OFFS.z
-    n_normal = nodes.new("GeometryNodeInputNormal");       n_normal.location = (-160,   0)
-    n_vmath  = nodes.new("ShaderNodeVectorMath");          n_vmath.location  = (  80,   0)
-    n_vmath.operation = 'SCALE'  # Vector * Scalar
+    n_normal = nodes.new("GeometryNodeInputNormal"); n_normal.location = (-160, 0)
+    n_vmath  = nodes.new("ShaderNodeVectorMath");    n_vmath.location  = (  80, 0)
+    n_vmath.operation = 'SCALE'
 
     # Apply offset
-    n_set = nodes.new("GeometryNodeSetPosition");          n_set.location    = ( 280,   0)
+    n_set = nodes.new("GeometryNodeSetPosition"); n_set.location = ( 280, 0)
 
-    # Wires
+    # Connections
     links.new(n_in.outputs["Geometry"],        n_set.inputs["Geometry"])
     links.new(n_named.outputs["Attribute"],    n_sep.inputs["Vector"])
     links.new(n_sep.outputs["Z"],              n_vmath.inputs["Scale"])
@@ -43,30 +109,55 @@ def _create_group(obj: bpy.types.Object) -> bpy.types.GeometryNodeTree:
     name = f"MLD_DisplaceGN::{obj.name}"
     ng = bpy.data.node_groups.new(name=name, type='GeometryNodeTree')
     _make_group_interface_45(ng)
-    _build_group_nodes_min(ng)
+    
+    # Try carrier-based approach first
+    carrier_name = f"MLD_Carrier::{obj.name}"
+    carrier_obj = bpy.data.objects.get(carrier_name)
+    
+    if carrier_obj:
+        print(f"[MLD] Building carrier-based GN graph")
+        _build_carrier_reader_graph(ng, obj)
+    else:
+        print(f"[MLD] Building simple GN graph (no carrier)")
+        _build_simple_graph(ng)
+    
     return ng
 
 def _ensure_gn_group_for_obj(obj: bpy.types.Object) -> bpy.types.GeometryNodeTree:
     name = f"MLD_DisplaceGN::{obj.name}"
     ng = bpy.data.node_groups.get(name)
+    
     if ng and ng.bl_idname != 'GeometryNodeTree':
-        try: bpy.data.node_groups.remove(ng, do_unlink=True)
-        except Exception: pass
+        try: 
+            bpy.data.node_groups.remove(ng, do_unlink=True)
+        except Exception: 
+            pass
         ng = None
+    
     if ng is None:
         ng = _create_group(obj)
     else:
-        # Rebuild if missing core nodes (на всякий случай)
-        if "Group Input" not in ng.nodes or "Group Output" not in ng.nodes:
-            _build_group_nodes_min(ng)
-        else:
-            # Обновим на новый вариант (если была старая простая версия)
-            try:
-                # проверим, есть ли SeparateXYZ
-                if not any(n.bl_idname == "ShaderNodeSeparateXYZ" for n in ng.nodes):
-                    _build_group_nodes_min(ng)
-            except Exception:
-                _build_group_nodes_min(ng)
+        # Rebuild graph to update carrier reference
+        carrier_name = f"MLD_Carrier::{obj.name}"
+        carrier_obj = bpy.data.objects.get(carrier_name)
+        
+        # Check if we need to switch between carrier/simple modes
+        has_obj_info = any(n.bl_idname == "GeometryNodeObjectInfo" for n in ng.nodes)
+        
+        if carrier_obj and not has_obj_info:
+            print(f"[MLD] Rebuilding GN graph for carrier mode")
+            _build_carrier_reader_graph(ng, obj)
+        elif not carrier_obj and has_obj_info:
+            print(f"[MLD] Rebuilding GN graph for simple mode")
+            _build_simple_graph(ng)
+        elif carrier_obj and has_obj_info:
+            # Update carrier object reference
+            for node in ng.nodes:
+                if node.bl_idname == "GeometryNodeObjectInfo":
+                    node.inputs["Object"].default_value = carrier_obj
+                    print(f"[MLD] Updated GN carrier reference")
+                    break
+    
     return ng
 
 def ensure_gn(obj: bpy.types.Object) -> bpy.types.NodesModifier:
@@ -80,5 +171,7 @@ def ensure_gn(obj: bpy.types.Object) -> bpy.types.NodesModifier:
 def remove_gn(obj: bpy.types.Object):
     md = obj.modifiers.get(GN_MOD_NAME)
     if md:
-        try: obj.modifiers.remove(md)
-        except Exception: pass
+        try: 
+            obj.modifiers.remove(md)
+        except Exception: 
+            pass
