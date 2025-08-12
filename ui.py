@@ -209,12 +209,12 @@ def _draw_layer_row_improved(ui, layout, s, idx: int, active_idx: int, painting:
 
     # VC channel
     sub = row.row(align=True); sub.enabled = not painting
-    if getattr(L, "vc_channel", 'NONE') == 'NONE':
+    current_channel = getattr(L, "vc_channel", 'NONE')
+    if current_channel == 'NONE':
         op = _op(sub, "mld.set_layer_channel", text="Set VC", icon='GROUP_VCOL')
         _set(op, layer_index=idx, index=idx)
     else:
-        sub.label(text=L.vc_channel, icon='GROUP_VCOL')
-        op = _op(sub, "mld.clear_layer_channel", text="", icon='X')
+        op = _op(sub, "mld.set_layer_channel", text=current_channel, icon='GROUP_VCOL')
         _set(op, layer_index=idx, index=idx)
 
     # Smart up / down / remove arrows
