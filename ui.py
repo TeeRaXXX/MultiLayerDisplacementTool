@@ -423,15 +423,10 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         
         col.prop(s, "preview_enable", text="Enable Preview")
         if getattr(s, "preview_enable", False):
-            sub = col.column(align=True)
-            sub.prop(s, "preview_blend", text="Simple Blend Mode")
-            sub.prop(s, "preview_mask_influence", text="Mask Influence")
-            sub.prop(s, "preview_contrast", text="Contrast")
-            
             # Subtle hint
-            hint = sub.row()
+            hint = col.row()
             hint.scale_y = 0.7
-            hint.label(text="Parameters applied on Recalculate", icon='INFO')
+            hint.label(text="Applied on Recalculate", icon='INFO')
 
         # 10) Decimate (preview)
         box = layout.box()
