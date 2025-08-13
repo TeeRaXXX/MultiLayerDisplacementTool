@@ -121,7 +121,7 @@ VC_ENUM = [
     ('R', 'R', "Red"),
     ('G', 'G', "Green"),
     ('B', 'B', "Blue"),
-    ('A', 'A', "Alpha"),
+    
 ]
 
 class MLD_Layer(PropertyGroup):
@@ -343,7 +343,7 @@ class MLD_Settings(PropertyGroup):
         # НЕТ update callback
     )
 
-    # Pack Vertex Colors
+    # Pack Vertex Colors (moved to bake section)
     fill_empty_vc_white: BoolProperty(
         name="Fill empty VC channels with white", default=DEFAULT_FILL_EMPTY_VC_WHITE,
         description="When packing VC, fill unassigned channels with white (1.0). If all channels are used, this is ignored",
@@ -351,6 +351,16 @@ class MLD_Settings(PropertyGroup):
     vc_attribute_name: StringProperty(
         name="VC Attribute Name", default=DEFAULT_VC_ATTRIBUTE_NAME,
         description="Name of the vertex color attribute to pack into (e.g., 'Col', 'Color', 'VertexColor')",
+    )
+    
+    # Bake options
+    bake_pack_vc: BoolProperty(
+        name="Pack to Vertex Colors", default=False,
+        description="Pack layer masks to vertex colors during bake operation",
+    )
+    bake_vc_attribute_name: StringProperty(
+        name="Bake VC Attribute Name", default=DEFAULT_VC_ATTRIBUTE_NAME,
+        description="Name of the vertex color attribute to pack into during bake (e.g., 'Col', 'Color', 'VertexColor')",
     )
     
     # Polycount tracking (for UI display)

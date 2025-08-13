@@ -163,7 +163,7 @@ class MLD_OT_apply_packed_vc_shader(Operator):
         # Check if we have layers with VC channel assignments
         has_assignments = False
         for L in s.layers:
-            if getattr(L, "vc_channel", 'NONE') in {'R', 'G', 'B', 'A'}:
+            if getattr(L, "vc_channel", 'NONE') in {'R', 'G', 'B'}:
                 has_assignments = True
                 break
         

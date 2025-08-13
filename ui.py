@@ -454,40 +454,68 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             hint.scale_y = 0.7
             hint.label(text="Applied on Recalculate", icon='INFO')
 
-        # 11) Pack Vertex Colors
+        # 11) Bake
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
-        col.label(text="Pack Vertex Colors")
         
-        # Show which channels are assigned
-        assigned_channels = []
-        for L in s.layers:
-            ch = getattr(L, "vc_channel", 'NONE')
-            if ch in ['R', 'G', 'B', 'A']:
-                assigned_channels.append(ch)
+        # Header
+        col.label(text="Bake Mesh", icon='CHECKMARK')
         
-        if assigned_channels:
-            info_text = f"Assigned: {', '.join(sorted(assigned_channels))}"
-            col.label(text=info_text, icon='INFO')
+        # Pack to Vertex Colors section
+        col.prop(s, "bake_pack_vc", text="Pack to Vertex Colors")
+        
+        if getattr(s, "bake_pack_vc", False):
+            # Show which channels are assigned
+            assigned_channels = []
+            for L in s.layers:
+                ch = getattr(L, "vc_channel", 'NONE')
+                if ch in ['R', 'G', 'B']:
+                    assigned_channels.append(ch)
+            
+            if assigned_channels:
+                info_text = f"Assigned: {', '.join(sorted(assigned_channels))}"
+                col.label(text=info_text, icon='INFO')
+            else:
+                col.label(text="No channels assigned", icon='ERROR')
+            
+            col.prop(s, "bake_vc_attribute_name", text="Attribute Name")
+            col.prop(s, "fill_empty_vc_white", text="Fill empty with white")
+            
+            # Check for name conflicts
+            bake_vc_name = getattr(s, "bake_vc_attribute_name", "Color")
+            conflict_found = False
+            for L in s.layers:
+                mask_name = getattr(L, 'mask_name', '')
+                if mask_name and mask_name == bake_vc_name:
+                    conflict_found = True
+                    break
+            
+            if conflict_found:
+                col.label(text=f"⚠ Name conflicts with layer mask", icon='ERROR')
+        
+        # Bake button
+        bake_row = col.row()
+        if getattr(s, "bake_pack_vc", False):
+            # Check if channels are assigned when pack VC is enabled
+            assigned_channels = []
+            for L in s.layers:
+                ch = getattr(L, "vc_channel", 'NONE')
+                if ch in ['R', 'G', 'B']:
+                    assigned_channels.append(ch)
+            
+            # Check for name conflicts
+            bake_vc_name = getattr(s, "bake_vc_attribute_name", "Color")
+            conflict_found = False
+            for L in s.layers:
+                mask_name = getattr(L, 'mask_name', '')
+                if mask_name and mask_name == bake_vc_name:
+                    conflict_found = True
+                    break
+            
+            bake_row.enabled = len(assigned_channels) > 0 and not conflict_found
         else:
-            col.label(text="No channels assigned", icon='ERROR')
-        
-        col.prop(s, "vc_attribute_name", text="Attribute Name")
-        col.prop(s, "fill_empty_vc_white", text="Fill empty with white")
-        
-        # Pack button - only enabled if channels are assigned
-        pack_row = col.row()
-        pack_row.enabled = len(assigned_channels) > 0
-        _op(pack_row, "mld.pack_vcols", text="Pack to Vertex Colors", icon='GROUP_VCOL')
-        
-        # Apply Packed VC Shader button
-        shader_row = col.row()
-        shader_row.enabled = len(assigned_channels) > 0
-        _op(shader_row, "mld.apply_packed_vc_shader", text="Apply Packed VC Shader", icon='MATERIAL')
-
-        # 12) Bake
-        row = layout.row(align=True); row.enabled = not painting
-        _op(row, "mld.bake_mesh", text="Bake Mesh", icon='CHECKMARK')
+            bake_row.enabled = True
+        _op(bake_row, "mld.bake_mesh", text="Bake Mesh", icon='CHECKMARK')
 
 
 # --------------- register -----------------------------------------------------

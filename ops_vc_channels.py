@@ -17,7 +17,7 @@ class MLD_OT_set_layer_channel(Operator):
     def draw(self, context):
         layout=self.layout
         obj=active_obj(context); s=obj.mld_settings
-        used=set([x.vc_channel for x in s.layers if x.vc_channel in {'R','G','B','A'}])
+        used=set([x.vc_channel for x in s.layers if x.vc_channel in {'R','G','B'}])
         current_channel = s.layers[self.layer_index].vc_channel if 0 <= self.layer_index < len(s.layers) else 'NONE'
         
         col=layout.column()
@@ -29,7 +29,7 @@ class MLD_OT_set_layer_channel(Operator):
         
         # Show available channels (excluding current channel)
         any_drawn=False
-        for ch in ('R','G','B','A'):
+        for ch in ('R','G','B'):
             if ch in used or ch == current_channel: continue
             any_drawn=True
             row=col.row()
@@ -46,7 +46,7 @@ class MLD_OT__apply_layer_channel(Operator):
     bl_idname = "mld._apply_layer_channel"
     bl_label = "Apply VC channel"
     layer_index: IntProperty()
-    channel: EnumProperty(items=[('NONE','NONE',''),('R','R',''),('G','G',''),('B','B',''),('A','A','')])
+    channel: EnumProperty(items=[('NONE','NONE',''),('R','R',''),('G','G',''),('B','B','')])
 
     def execute(self, context):
         obj=active_obj(context); s=obj.mld_settings

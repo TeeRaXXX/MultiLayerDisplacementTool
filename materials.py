@@ -89,11 +89,25 @@ def _mask_factor(nodes, links, mask_name: str, influence: float, y=0):
         fallback.outputs["Value"].default_value = 0.5
         return fallback.outputs["Value"]
     
-    attr = nodes.new("ShaderNodeAttribute"); attr.location = (-300, y)
-    attr.attribute_name = mask_name or ""
-    sep = nodes.new("ShaderNodeSeparateRGB"); sep.location = (-160, y)
-    inp = sep.inputs.get("Image") or sep.inputs.get("Color") or sep.inputs[0]
-    links.new(attr.outputs.get("Color", attr.outputs[0]), inp)
+    # Проверяем, существует ли атрибут (для случая, когда атрибуты уже удалены)
+    try:
+        attr = nodes.new("ShaderNodeAttribute"); attr.location = (-300, y)
+        attr.attribute_name = mask_name or ""
+        
+        # Если атрибут не найден, возвращаем fallback
+        if not attr.attribute_name or attr.attribute_name.strip() == "":
+            fallback = nodes.new("ShaderNodeValue"); fallback.location = (-300, y)
+            fallback.outputs["Value"].default_value = 0.5
+            return fallback.outputs["Value"]
+        
+        sep = nodes.new("ShaderNodeSeparateRGB"); sep.location = (-160, y)
+        inp = sep.inputs.get("Image") or sep.inputs.get("Color") or sep.inputs[0]
+        links.new(attr.outputs.get("Color", attr.outputs[0]), inp)
+    except Exception:
+        # Если произошла ошибка при создании атрибута, возвращаем fallback
+        fallback = nodes.new("ShaderNodeValue"); fallback.location = (-300, y)
+        fallback.outputs["Value"].default_value = 0.5
+        return fallback.outputs["Value"]
 
     clp = nodes.new("ShaderNodeClamp"); clp.location = (-20, y)
     clp.inputs["Min"].default_value = 0.0
@@ -351,283 +365,272 @@ def ensure_preview_material(obj: bpy.types.Object, s) -> None:
 def build_packed_vc_preview_shader(obj: bpy.types.Object, s) -> bpy.types.Material:
     """
     Create a shader that reads from packed vertex colors and blends materials.
-    Simplified version: create attribute node with name "Color", output separate XYZ, use XYZ as masks.
+    Uses proper mix nodes for material blending based on vertex color channels.
     """
     try:
         if not obj or obj.type != 'MESH':
             return None
             
         me = obj.data
-        vc_name = getattr(s, 'vc_attribute_name', 'Color')
+        vc_name = getattr(s, 'vc_attribute_name', 'Color')  # This should be the bake_vc_attribute_name when called from bake
         
         print(f"[MLD] Starting build_packed_vc_preview_shader for object: {obj.name}")
         print(f"[MLD] Using vertex color attribute: {vc_name}")
         
         # Get UV layer name
-        uv_name = "UVMap"
-        if me.uv_layers:
-            uv_name = me.uv_layers[0].name
-        print(f"[MLD] UV layer name: {uv_name}")
+        uv_name = active_uv_layer_name(me)
+        if not uv_name:
+            print("[MLD] No UV layer found")
+            return None
         
         # Get layers with VC channel assignments
-        layers = []
-        channel_assignments = {}
-        
+        layers_data = []
         for i, L in enumerate(s.layers):
-            enabled = getattr(L, "enabled", False)
-            material = getattr(L, "material", None)
+            if not L.enabled or not L.material:
+                continue
             vc_channel = getattr(L, "vc_channel", 'NONE')
-            
-            print(f"[MLD] Layer {i}: enabled={enabled}, material={material.name if material else 'None'}, vc_channel={vc_channel}")
-            
-            if enabled and material:
-                if vc_channel in {'R', 'G', 'B', 'A'}:
-                    layers.append(L)
-                    channel_assignments[vc_channel] = i
-                    print(f"[MLD] Added layer {i} with channel {vc_channel}")
-
-        print(f"[MLD] Valid layers with VC channels: {len(layers)}")
-        print(f"[MLD] Channel assignments: {channel_assignments}")
+            if vc_channel in {'R', 'G', 'B'}:
+                base_img, h_img = _layer_images(L)
+                layers_data.append({
+                    'index': i,
+                    'layer': L,
+                    'channel': vc_channel,
+                    'base_img': base_img,
+                    'height_img': h_img
+                })
+                print(f"[MLD] Added layer {i} with channel {vc_channel}")
         
-        if not layers:
+        if not layers_data:
             print("[MLD] No layers with VC channel assignments found")
             return None
 
         # Create/clear preview material
         mat_name = f"MLD_PackedVC::{obj.name}"
-        print(f"[MLD] Creating material: {mat_name}")
-        
         mat = bpy.data.materials.get(mat_name)
         if not mat:
             mat = bpy.data.materials.new(mat_name)
             mat.use_nodes = True
-            print(f"[MLD] Created new material: {mat.name}")
-        else:
-            print(f"[MLD] Using existing material: {mat.name}")
         
         nt = mat.node_tree
         nodes, links = nt.nodes, nt.links
         nodes.clear()
-        print(f"[MLD] Cleared material nodes")
 
-        # Output and BSDF
-        print(f"[MLD] Creating output and BSDF nodes")
+        # Create output and BSDF
         out = nodes.new("ShaderNodeOutputMaterial")
-        out.location = (900, 0)
+        out.location = (2000, 0)
         bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-        bsdf.location = (680, 0)
+        bsdf.location = (1800, 0)
         bsdf.inputs["Roughness"].default_value = 0.5
         links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
 
-        # UV Map
-        print(f"[MLD] Creating UV Map node")
+        # UV Map node
         uv = nodes.new("ShaderNodeUVMap")
-        uv.location = (-520, 0)
+        uv.location = (-1000, 0)
         uv.uv_map = uv_name
 
-        # Create attribute node with name "Color" (as per user instruction)
-        print(f"[MLD] Creating attribute node with name: {vc_name}")
+        # Vertex Color attribute node
         vc_attr = nodes.new("ShaderNodeAttribute")
-        vc_attr.location = (-520, -200)
+        vc_attr.location = (-1000, -300)
         vc_attr.attribute_name = vc_name
-        print(f"[MLD] Created attribute node: {vc_attr.type} with name: {vc_name}")
+        
+        # Check if the attribute exists
+        if not vc_name or vc_name.strip() == "":
+            print(f"[MLD] Error: No VC attribute name specified")
+            return None
+            
+        # Debug: Check if the attribute actually exists on the mesh
+        attr_exists = False
+        if hasattr(me, "color_attributes"):
+            attr_exists = attr_exists or me.color_attributes.get(vc_name) is not None
+        if hasattr(me, "vertex_colors"):
+            attr_exists = attr_exists or me.vertex_colors.get(vc_name) is not None
+        if not attr_exists:
+            print(f"[MLD] Error: VC attribute '{vc_name}' not found on mesh")
+            print(f"[MLD] Available color_attributes: {[a.name for a in me.color_attributes] if hasattr(me, 'color_attributes') else 'N/A'}")
+            print(f"[MLD] Available vertex_colors: {[a.name for a in me.vertex_colors] if hasattr(me, 'vertex_colors') else 'N/A'}")
+            return None
 
-        # Separate XYZ from the attribute (as per user instruction)
-        print(f"[MLD] Creating separate XYZ node")
+        # Separate RGB to get individual channels
         sep_rgb = nodes.new("ShaderNodeSeparateRGB")
-        sep_rgb.location = (-300, -200)
-        links.new(vc_attr.outputs["Color"], sep_rgb.inputs["Color"])
-        print(f"[MLD] Connected attribute to separate XYZ")
+        sep_rgb.location = (-800, -300)
+        
+        # Get the correct output from the attribute node
+        vc_output = None
+        print(f"[MLD] Available outputs on attribute node: {[o.name for o in vc_attr.outputs]}")
+        if "Color" in vc_attr.outputs:
+            vc_output = vc_attr.outputs["Color"]
+            print(f"[MLD] Using 'Color' output")
+        elif "Fac" in vc_attr.outputs:
+            vc_output = vc_attr.outputs["Fac"]
+            print(f"[MLD] Using 'Fac' output")
+        elif len(vc_attr.outputs) > 0:
+            vc_output = vc_attr.outputs[0]  # Use first available output
+            print(f"[MLD] Using first available output: {vc_attr.outputs[0].name}")
+        else:
+            print(f"[MLD] Error: No valid output found for attribute node")
+            return None
+        
+        # Get the correct input for SeparateRGB node
+        print(f"[MLD] Available inputs on SeparateRGB node: {[i.name for i in sep_rgb.inputs]}")
+        sep_input = None
+        if "Image" in sep_rgb.inputs:
+            sep_input = sep_rgb.inputs["Image"]
+            print(f"[MLD] Using 'Image' input")
+        elif "Color" in sep_rgb.inputs:
+            sep_input = sep_rgb.inputs["Color"]
+            print(f"[MLD] Using 'Color' input")
+        elif len(sep_rgb.inputs) > 0:
+            sep_input = sep_rgb.inputs[0]  # Use first available input
+            print(f"[MLD] Using first available input: {sep_rgb.inputs[0].name}")
+        else:
+            print(f"[MLD] Error: No valid input found for SeparateRGB node")
+            return None
+            
+        links.new(vc_output, sep_input)
 
         # Get preview parameters
         infl, contr = _get_preview_params(s)
         use_simple_blend = getattr(s, "preview_blend", False)
 
-        layered_col = None
-        y = 0
-
-        if use_simple_blend:
-            # Simple additive blend mode
-            for idx, L in enumerate(layers):
-                base_img, h_img = _layer_images(L)
-                vc_channel = getattr(L, "vc_channel", 'NONE')
-                
-                if vc_channel not in channel_assignments:
-                    continue
-
-                # Color source for this layer
-                color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
-                                       loc=(-260, y), non_color=False)
-                color_socket = color_node.outputs["Color"]
-
-                # Get mask value from packed vertex color channel (use XYZ outputs as masks)
-                if vc_channel == 'R':
-                    mask_socket = sep_rgb.outputs["R"]
-                elif vc_channel == 'G':
-                    mask_socket = sep_rgb.outputs["G"]
-                elif vc_channel == 'B':
-                    mask_socket = sep_rgb.outputs["B"]
-                elif vc_channel == 'A':
-                    mask_socket = sep_rgb.outputs["A"]
-                else:
-                    continue
-
-                # Apply mask influence
-                mul_infl = nodes.new("ShaderNodeMath")
-                mul_infl.location = (120, y)
-                mul_infl.operation = 'MULTIPLY'
-                mul_infl.inputs[1].default_value = float(infl)
-                links.new(mask_socket, mul_infl.inputs[0])
-
-                # Clamp to 0-1
-                clamp = nodes.new("ShaderNodeClamp")
-                clamp.location = (260, y)
-                links.new(mul_infl.outputs["Value"], clamp.inputs["Value"])
-
-                if layered_col is None:
-                    layered_col = color_socket
-                else:
-                    # Blend with previous layer
-                    mix = nodes.new("ShaderNodeMixRGB")
-                    mix.location = (480, y)
-                    mix.blend_type = 'MIX'
-                    links.new(clamp.outputs["Result"], mix.inputs["Fac"])
-                    links.new(layered_col, mix.inputs["Color1"])
-                    links.new(color_socket, mix.inputs["Color2"])
-                    layered_col = mix.outputs["Color"]
-
-                y -= 260
-        else:
-            # HeightLerp blend mode
-            layered_h = None
-            
-            for idx, L in enumerate(layers):
-                base_img, h_img = _layer_images(L)
-                vc_channel = getattr(L, "vc_channel", 'NONE')
-                
-                if vc_channel not in channel_assignments:
-                    continue
-
-                # Color source for this layer
-                color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
-                                       loc=(-260, y), non_color=False)
-                color_socket = color_node.outputs["Color"]
-
-                # Height source (Non-Color)
-                h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
-                                   loc=(-260, y - 180), non_color=True)
-                h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
-                                          getattr(L, "multiplier", 1.0), getattr(L, "bias", 0.0),
-                                          loc=(-260, y - 180))
-
-                # Get mask value from packed vertex color channel (use XYZ outputs as masks)
-                if vc_channel == 'R':
-                    mask_socket = sep_rgb.outputs["R"]
-                elif vc_channel == 'G':
-                    mask_socket = sep_rgb.outputs["G"]
-                elif vc_channel == 'B':
-                    mask_socket = sep_rgb.outputs["B"]
-                elif vc_channel == 'A':
-                    mask_socket = sep_rgb.outputs["A"]
-                else:
-                    continue
-
-                # Apply mask influence
-                mul_infl = nodes.new("ShaderNodeMath")
-                mul_infl.location = (120, y)
-                mul_infl.operation = 'MULTIPLY'
-                mul_infl.inputs[1].default_value = float(infl)
-                links.new(mask_socket, mul_infl.inputs[0])
-
-                # Clamp to 0-1
-                clamp = nodes.new("ShaderNodeClamp")
-                clamp.location = (260, y)
-                links.new(mul_infl.outputs["Value"], clamp.inputs["Value"])
-
-                if layered_col is None:
-                    layered_col = color_socket
-                    layered_h = h_scalar
-                else:
-                    # Height delta term: (H_B - H_A) * Contrast
-                    sub = nodes.new("ShaderNodeMath")
-                    sub.location = (160, y - 180)
-                    sub.operation = 'SUBTRACT'
-                    links.new(h_scalar, sub.inputs[0])      # H_B
-                    links.new(layered_h, sub.inputs[1])     # H_A
-
-                    mulC = nodes.new("ShaderNodeMath")
-                    mulC.location = (300, y - 180)
-                    mulC.operation = 'MULTIPLY'
-                    mulC.inputs[1].default_value = float(contr)
-                    links.new(sub.outputs["Value"], mulC.inputs[0])
-
-                    # Combine mask and height influence
-                    addm = nodes.new("ShaderNodeMath")
-                    addm.location = (440, y - 120)
-                    addm.operation = 'ADD'
-                    links.new(clamp.outputs["Result"], addm.inputs[0])
-                    links.new(mulC.outputs["Value"], addm.inputs[1])
-
-                    # Ensure minimum visibility
-                    max_node = nodes.new("ShaderNodeMath")
-                    max_node.location = (520, y - 120)
-                    max_node.operation = 'MAXIMUM'
-                    max_node.inputs[1].default_value = 0.1
-                    links.new(addm.outputs["Value"], max_node.inputs[0])
-
-                    fac = nodes.new("ShaderNodeClamp")
-                    fac.location = (660, y - 120)
-                    links.new(max_node.outputs["Value"], fac.inputs["Value"])
-
-                    # Blend color
-                    mix = nodes.new("ShaderNodeMixRGB")
-                    mix.location = (560, y)
-                    mix.blend_type = 'MIX'
-                    links.new(fac.outputs["Result"], mix.inputs["Fac"])
-                    links.new(layered_col, mix.inputs["Color1"])
-                    links.new(color_socket, mix.inputs["Color2"])
-                    layered_col = mix.outputs["Color"]
-
-                    # Propagate height for next iteration
-                    inv = nodes.new("ShaderNodeMath")
-                    inv.location = (520, y - 220)
-                    inv.operation = 'SUBTRACT'
-                    inv.inputs[0].default_value = 1.0
-                    links.new(fac.outputs["Result"], inv.inputs[1])
-
-                    aterm = nodes.new("ShaderNodeMath")
-                    aterm.location = (680, y - 210)
-                    aterm.operation = 'MULTIPLY'
-                    links.new(layered_h, aterm.inputs[0])
-                    links.new(inv.outputs["Value"], aterm.inputs[1])
-
-                    bterm = nodes.new("ShaderNodeMath")
-                    bterm.location = (820, y - 210)
-                    bterm.operation = 'MULTIPLY'
-                    links.new(h_scalar, bterm.inputs[0])
-                    links.new(fac.outputs["Result"], bterm.inputs[1])
-
-                    hmix = nodes.new("ShaderNodeMath")
-                    hmix.location = (960, y - 210)
-                    hmix.operation = 'ADD'
-                    links.new(aterm.outputs["Value"], hmix.inputs[0])
-                    links.new(bterm.outputs["Value"], hmix.inputs[1])
-
-                    layered_h = hmix.outputs.get("Result") or hmix.outputs.get("Value") or hmix.outputs[0]
-
-                y -= 260
-
-        # Drive BaseColor
-        if layered_col:
-            links.new(layered_col, bsdf.inputs["Base Color"])
-
-        # Assign material to slot 0
-        print(f"[MLD] Assigning material to object")
-        _assign_preview_slot0(obj, mat)
+        # Create texture nodes for each layer
+        x_offset = -600
+        y_offset = 200
+        layer_outputs = []
         
-        print(f"[MLD] Created packed VC preview shader using '{vc_name}' attribute")
-        print(f"[MLD] Material '{mat.name}' assigned to object '{obj.name}'")
-        print(f"[MLD] build_packed_vc_preview_shader completed successfully")
+        for data in layers_data:
+            L = data['layer']
+            channel = data['channel']
+            base_img = data['base_img']
+            
+            # Create mapping node for tiling
+            mapping = nodes.new("ShaderNodeMapping")
+            mapping.location = (x_offset, y_offset)
+            tiling = getattr(L, "tiling", 1.0)
+            mapping.inputs["Scale"].default_value = (tiling, tiling, 1.0)
+            links.new(uv.outputs["UV"], mapping.inputs["Vector"])
+            
+            # Create texture node or RGB fallback
+            if base_img:
+                tex = nodes.new("ShaderNodeTexImage")
+                tex.location = (x_offset + 200, y_offset)
+                tex.image = base_img
+                tex.interpolation = 'Cubic'
+                tex.extension = 'REPEAT'
+                links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+                color_output = tex.outputs["Color"]
+            else:
+                rgb = nodes.new("ShaderNodeRGB")
+                rgb.location = (x_offset + 200, y_offset)
+                rgb.outputs["Color"].default_value = (0.5, 0.5, 0.5, 1.0)
+                color_output = rgb.outputs["Color"]
+            
+            # Get mask value from appropriate channel
+            if channel == 'R':
+                mask_output = sep_rgb.outputs["R"]
+            elif channel == 'G':
+                mask_output = sep_rgb.outputs["G"]
+            elif channel == 'B':
+                mask_output = sep_rgb.outputs["B"]
+            else:
+                print(f"[MLD] Error: Invalid channel '{channel}'")
+                return None
+            
+            layer_outputs.append({
+                'color': color_output,
+                'mask': mask_output,
+                'layer': L
+            })
+            
+            y_offset -= 300
+
+        # Now blend layers together using Mix RGB nodes
+        if len(layer_outputs) == 1:
+            # Single layer - direct connection
+            final_color = layer_outputs[0]['color']
+        else:
+            # Multiple layers - create blend chain
+            x_pos = 400
+            y_pos = 0
+            
+            # Start with first layer as base
+            current_color = layer_outputs[0]['color']
+            
+            for i in range(1, len(layer_outputs)):
+                # Create Mix RGB node for blending
+                mix = nodes.new("ShaderNodeMixRGB")
+                mix.location = (x_pos, y_pos)
+                mix.blend_type = 'MIX'
+                mix.use_clamp = True
+                
+                # Apply influence to mask
+                if infl != 1.0:
+                    mult = nodes.new("ShaderNodeMath")
+                    mult.location = (x_pos - 200, y_pos - 100)
+                    mult.operation = 'MULTIPLY'
+                    mult.inputs[1].default_value = infl
+                    links.new(layer_outputs[i]['mask'], mult.inputs[0])
+                    
+                    # Clamp the result
+                    clamp = nodes.new("ShaderNodeClamp")
+                    clamp.location = (x_pos - 100, y_pos - 100)
+                    links.new(mult.outputs["Value"], clamp.inputs["Value"])
+                    mask_input = clamp.outputs["Result"]
+                else:
+                    mask_input = layer_outputs[i]['mask']
+                
+                # Connect to mix node
+                links.new(mask_input, mix.inputs["Fac"])
+                links.new(current_color, mix.inputs["Color1"])
+                links.new(layer_outputs[i]['color'], mix.inputs["Color2"])
+                
+                current_color = mix.outputs["Color"]
+                x_pos += 300
+                y_pos -= 150
+            
+            final_color = current_color
+
+        # Connect final color to BSDF
+        links.new(final_color, bsdf.inputs["Base Color"])
+
+        # Optional: Add normal/bump mapping if height images exist
+        if any(d.get('height_img') for d in layers_data):
+            # Create a simple bump node setup
+            bump = nodes.new("ShaderNodeBump")
+            bump.location = (1600, -200)
+            bump.inputs["Strength"].default_value = 0.5
+            
+            # For simplicity, use the first height map found
+            for data in layers_data:
+                if data.get('height_img'):
+                    h_img = data['height_img']
+                    
+                    # Height texture
+                    h_tex = nodes.new("ShaderNodeTexImage")
+                    h_tex.location = (1200, -200)
+                    h_tex.image = h_img
+                    h_tex.interpolation = 'Cubic'
+                    h_tex.extension = 'REPEAT'
+                    
+                    try:
+                        h_tex.image.colorspace_settings.name = "Non-Color"
+                    except:
+                        pass
+                    
+                    # Height mapping
+                    h_mapping = nodes.new("ShaderNodeMapping")
+                    h_mapping.location = (1000, -200)
+                    h_mapping.inputs["Scale"].default_value = (1.0, 1.0, 1.0)
+                    
+                    links.new(uv.outputs["UV"], h_mapping.inputs["Vector"])
+                    links.new(h_mapping.outputs["Vector"], h_tex.inputs["Vector"])
+                    links.new(h_tex.outputs["Color"], bump.inputs["Height"])
+                    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+                    break
+
+        # Don't assign material here - let the caller handle assignment
+        # _assign_preview_slot0(obj, mat)
+        
+        print(f"[MLD] Successfully created packed VC shader with {len(layers_data)} layers")
         return mat
         
     except Exception as e:

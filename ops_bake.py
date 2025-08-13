@@ -6,21 +6,19 @@ from .attrs import ensure_color_attr, color_attr_exists, loop_red
 from .constants import PACK_ATTR, ALPHA_PREFIX, GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
 
 def _any_channel_assigned(s):
-    return any(L.vc_channel in {'R','G','B','A'} for L in s.layers)
+    return any(L.vc_channel in {'R','G','B'} for L in s.layers)
 
 def _pack_vc_now(obj, s):
     """Pack selected channels per-loop into object's vertex colors with proper error handling."""
     me = obj.data
     
     print(f"[MLD] Starting pack VC for object: {obj.name}")
-    print(f"[MLD] Available vertex colors: {[vc.name for vc in me.vertex_colors] if hasattr(me, 'vertex_colors') else 'None'}")
     
     # Get or create the main vertex color layer for the object
-    # Use the specified name from settings
     vc_layer = None
-    vc_name = getattr(s, 'vc_attribute_name', 'Color')
+    vc_name = getattr(s, 'vc_attribute_name', 'Color')  # This will be set to bake_vc_attribute_name by the caller
     
-    # First try to find existing vertex color layer with the exact specified name
+    # First try to find existing vertex color layer
     if hasattr(me, "vertex_colors") and len(me.vertex_colors) > 0:
         for vc in me.vertex_colors:
             if vc.name == vc_name:
@@ -28,23 +26,39 @@ def _pack_vc_now(obj, s):
                 print(f"[MLD] Using existing vertex color layer: {vc_layer.name}")
                 break
     
-    # If not found, create new vertex color layer with the specified name
-    if not vc_layer:
+    # If not found, try color_attributes
+    if not vc_layer and hasattr(me, "color_attributes"):
+        try:
+            vc_layer = me.color_attributes.get(vc_name)
+            if not vc_layer:
+                vc_layer = me.color_attributes.new(name=vc_name, type='BYTE_COLOR', domain='CORNER')
+                print(f"[MLD] Created new color attribute: {vc_layer.name}")
+        except Exception as e:
+            print(f"[MLD] Failed to create color attribute: {e}")
+    
+    # Fallback to vertex_colors
+    if not vc_layer and hasattr(me, "vertex_colors"):
         try:
             vc_layer = me.vertex_colors.new(name=vc_name)
             print(f"[MLD] Created new vertex color layer: {vc_layer.name}")
         except Exception as e:
             print(f"[MLD] Failed to create vertex color layer: {e}")
-            return False
     
     if not vc_layer:
         print("[MLD] No vertex color layer available")
-        return False
+        return False, None
+    
+    # Check if the VC layer name conflicts with any MLD mask attributes
+    for L in s.layers:
+        mask_name = getattr(L, 'mask_name', '')
+        if mask_name and mask_name == vc_name:
+            print(f"[MLD] Warning: VC layer name '{vc_name}' conflicts with layer mask '{mask_name}'")
+            return False, None
     
     nloops = len(me.loops)
     
     # Build per-channel assignments
-    chan_map = {'R': None, 'G': None, 'B': None, 'A': None}
+    chan_map = {'R': None, 'G': None, 'B': None}
     for i, L in enumerate(s.layers):
         ch = getattr(L, 'vc_channel', 'NONE')
         if ch in chan_map and chan_map[ch] is None:
@@ -59,14 +73,13 @@ def _pack_vc_now(obj, s):
     per_loop = {
         'R': [default_fill] * nloops, 
         'G': [default_fill] * nloops, 
-        'B': [default_fill] * nloops, 
-        'A': [1.0] * nloops  # Alpha always 1.0
+        'B': [default_fill] * nloops
     }
 
     # Fill assigned channels from mask data
     for ch, layer_idx in chan_map.items():
         if layer_idx is None:
-            continue  # Use default fill
+            continue
             
         L = s.layers[layer_idx]
         mask_name = getattr(L, 'mask_name', '')
@@ -89,23 +102,31 @@ def _pack_vc_now(obj, s):
     # Write packed data to vertex color layer
     try:
         print(f"[MLD] Writing {nloops} loops to vertex color layer: {vc_layer.name}")
-        for li in range(nloops):
-            r = per_loop['R'][li]
-            g = per_loop['G'][li] 
-            b = per_loop['B'][li]
-            a = per_loop['A'][li]
-            vc_layer.data[li].color = (r, g, b, a)
+        
+        # Определяем, какой API использовать для записи
+        if hasattr(vc_layer, 'data'):
+            # color_attributes или vertex_colors с .data
+            for li in range(nloops):
+                r = per_loop['R'][li]
+                g = per_loop['G'][li] 
+                b = per_loop['B'][li]
+                vc_layer.data[li].color = (r, g, b, 1.0)  # Alpha always 1.0
+        else:
+            # Fallback если нет .data
+            print(f"[MLD] Warning: vc_layer has no .data attribute")
+            return False, None
         
         me.update()
         print(f"[MLD] Successfully packed to vertex color layer: {vc_layer.name}")
-        s.vc_packed = True
-        return True
+        return True, vc_layer.name  # Возвращаем success и имя слоя
         
     except Exception as e:
         print(f"[MLD] Pack VC failed: {e}")
-        return False
+        import traceback
+        traceback.print_exc()
+        return False, None
 
-def _cleanup_after_bake(obj):
+def _cleanup_after_bake(obj, preserve_vc_name=None):
     me = obj.data
     removed_attrs = []
     
@@ -129,6 +150,40 @@ def _cleanup_after_bake(obj):
                     removed_attrs.append(f"vertex_color:{attr_name}")
             except Exception as e:
                 print(f"[MLD] Failed to remove vertex color: {e}")
+    
+    # Remove any other attributes that might conflict with the packed VC attribute
+    # (but preserve the packed VC attribute if specified)
+    if hasattr(me, "color_attributes"):
+        for a in list(me.color_attributes):
+            try:
+                # Skip if this is the packed VC attribute we want to preserve
+                if preserve_vc_name and a.name == preserve_vc_name:
+                    print(f"[MLD] Skipping removal of preserved VC attribute: {a.name}")
+                    continue
+                    
+                # Remove other MLD-related attributes that might conflict
+                if a.name.startswith("MLD_") or a.name == "Color":
+                    attr_name = a.name  # Save name before removal
+                    me.color_attributes.remove(a)
+                    removed_attrs.append(f"other_attr:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove other attribute: {e}")
+    
+    if hasattr(me, "vertex_colors"):
+        for a in list(me.vertex_colors):
+            try:
+                # Skip if this is the packed VC attribute we want to preserve
+                if preserve_vc_name and a.name == preserve_vc_name:
+                    print(f"[MLD] Skipping removal of preserved VC attribute: {a.name}")
+                    continue
+                    
+                # Remove other MLD-related attributes that might conflict
+                if a.name.startswith("MLD_") or a.name == "Color":
+                    attr_name = a.name  # Save name before removal
+                    me.vertex_colors.remove(a)
+                    removed_attrs.append(f"other_vc:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove other vertex color: {e}")
     
     # Remove MLD displacement attributes
     if hasattr(me, "attributes"):
@@ -173,6 +228,10 @@ def _cleanup_after_bake(obj):
             except Exception as e:
                 print(f"[MLD] Failed to remove pack vertex color: {e}")
     
+    # Preserve the packed VC attribute if specified
+    if preserve_vc_name:
+        print(f"[MLD] Preserving packed VC attribute: {preserve_vc_name}")
+    
     me.update()
     
     if removed_attrs:
@@ -189,15 +248,81 @@ class MLD_OT_bake_mesh(Operator):
         obj=active_obj(context)
         if not obj or obj.type!='MESH': return {'CANCELLED'}
         s=obj.mld_settings
+        
+        # Check if pack VC is enabled but no channels are assigned
+        if getattr(s, "bake_pack_vc", False) and not _any_channel_assigned(s):
+            self.report({'ERROR'}, "Pack to Vertex Colors is enabled but no VC channels are assigned. Please assign channels in layer settings first.")
+            return {'CANCELLED'}
 
-        # FIRST: pack VC if any channel assigned (before removing attributes)
+        # STEP 1: Create preview material FIRST (before any modifications) - ONLY if pack to VC is enabled
+        preview_material_created = False
+        if getattr(s, "bake_pack_vc", False) and getattr(s, "preview_enable", False):
+            try:
+                from .materials import build_heightlerp_preview_shader
+                print("[MLD] Creating preview material before bake (pack to VC enabled)...")
+                mat = build_heightlerp_preview_shader(
+                    obj, s,
+                    preview_influence=getattr(s, "preview_mask_influence", 1.0),
+                    preview_contrast=getattr(s, "preview_contrast", 1.0),
+                )
+                if mat:
+                    preview_material_created = True
+                    print(f"[MLD] Preview material created: {mat.name}")
+                    
+                    # Ensure material is assigned to object
+                    if len(obj.data.materials) == 0:
+                        obj.data.materials.append(mat)
+                    else:
+                        obj.data.materials[0] = mat
+                    
+                    # Ensure all polygons use this material
+                    for poly in obj.data.polygons:
+                        poly.material_index = 0
+                    
+                    obj.data.update()
+                    print(f"[MLD] Preview material '{mat.name}' assigned to all {len(obj.data.polygons)} polygons")
+                else:
+                    print("[MLD] Failed to create preview material")
+            except Exception as e:
+                print(f"[MLD] Failed to create preview material: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # STEP 2: Pack VC if enabled and any channel assigned (before removing attributes)
         vc_packed = False
-        if _any_channel_assigned(s):
-            vc_packed = _pack_vc_now(obj, s)
+        packed_vc_name = None
+        if getattr(s, "bake_pack_vc", False) and _any_channel_assigned(s):
+            # Check for attribute name conflicts
+            bake_vc_name = getattr(s, "bake_vc_attribute_name", "Color")
+            conflict_found = False
+            
+            # Check if the bake VC name conflicts with any existing MLD mask attributes
+            for L in s.layers:
+                mask_name = getattr(L, 'mask_name', '')
+                if mask_name and mask_name == bake_vc_name:
+                    conflict_found = True
+                    self.report({'ERROR'}, f"VC attribute name '{bake_vc_name}' conflicts with layer mask '{mask_name}'. Please use a different name.")
+                    return {'CANCELLED'}
+            
+            if not conflict_found:
+                # Temporarily set the VC attribute name for packing
+                original_vc_name = getattr(s, 'vc_attribute_name', 'Color')
+                s.vc_attribute_name = bake_vc_name
+                
+                success, vc_layer_name = _pack_vc_now(obj, s)
+                
+                # Restore original VC attribute name
+                s.vc_attribute_name = original_vc_name
+                
+                if success:
+                    vc_packed = True
+                    packed_vc_name = vc_layer_name
+                    s.vc_packed = True
+                    s.vc_attribute_name = bake_vc_name  # Keep the bake name for the shader
 
         prev = safe_mode(obj, 'OBJECT')
 
-        # apply modifiers in order: Subdiv -> GN -> Decimate
+        # STEP 3: Apply modifiers in order: Subdiv -> GN -> Decimate
         for name in (SUBDIV_MOD_NAME, GN_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:
@@ -205,8 +330,16 @@ class MLD_OT_bake_mesh(Operator):
                     bpy.ops.object.modifier_apply(modifier=name)
                 except Exception:
                     pass
+        
+        # Verify that preview material is still assigned after modifiers
+        if preview_material_created and len(obj.data.materials) > 0:
+            mat = obj.data.materials[0]
+            if mat and mat.name.startswith("MLD_Preview::"):
+                print(f"[MLD] Preview material '{mat.name}' preserved after modifiers")
+            else:
+                print(f"[MLD] Warning: Preview material may have been lost after modifiers")
 
-        # remove carrier object
+        # STEP 4: Remove carrier object
         cname=f"MLD_Carrier::{obj.name}"
         carr=bpy.data.objects.get(cname)
         if carr:
@@ -217,13 +350,60 @@ class MLD_OT_bake_mesh(Operator):
                     bpy.data.meshes.remove(me, do_unlink=True)
             except Exception: pass
 
-        # THEN: cleanup attributes after packing is done
-        _cleanup_after_bake(obj)
+        # STEP 5: Apply packed VC shader if VC was packed (overrides preview material)
+        if vc_packed:
+            try:
+                from .materials import build_packed_vc_preview_shader
+                mat = build_packed_vc_preview_shader(obj, s)
+                if mat:
+                    print(f"[MLD] Applied packed VC shader after bake: {mat.name}")
+                    
+                    # Ensure material is assigned to object (overrides preview material)
+                    if len(obj.data.materials) == 0:
+                        obj.data.materials.append(mat)
+                    else:
+                        obj.data.materials[0] = mat
+                    
+                    # Ensure all polygons use this material
+                    for poly in obj.data.polygons:
+                        poly.material_index = 0
+                    
+                    obj.data.update()
+                    print(f"[MLD] Packed VC material '{mat.name}' assigned to all {len(obj.data.polygons)} polygons")
+                    
+                    # Update preview_material_created flag since we now have a different material
+                    preview_material_created = False
+                else:
+                    print(f"[MLD] Failed to create packed VC shader")
+            except Exception as e:
+                print(f"[MLD] Failed to apply packed VC shader: {e}")
+                import traceback
+                traceback.print_exc()
 
-        # clear settings (layers etc.)
+        # STEP 6: Cleanup attributes AFTER materials are created
+        _cleanup_after_bake(obj, preserve_vc_name=packed_vc_name if vc_packed else None)
+        
+        # Verify that material is still working after cleanup
+        if len(obj.data.materials) > 0:
+            mat = obj.data.materials[0]
+            if mat:
+                print(f"[MLD] Final material after cleanup: '{mat.name}'")
+                if mat.name.startswith("MLD_Preview::") or mat.name.startswith("MLD_PackedVC::"):
+                    print(f"[MLD] ✓ Material should work correctly after attribute cleanup")
+                else:
+                    print(f"[MLD] ⚠ Material may not be MLD preview material")
+            else:
+                print(f"[MLD] ⚠ No material assigned after cleanup")
+        else:
+            print(f"[MLD] ⚠ No materials found after cleanup")
+
+        # clear settings (layers etc.) - но сохраняем информацию о VC
+        vc_attr_name = getattr(s, 'vc_attribute_name', 'Color')  # Сохраняем имя атрибута
         s.layers.clear()
         s.is_painting=False
-        s.vc_packed=False
+        # НЕ сбрасываем vc_packed и vc_attribute_name, чтобы шейдер мог их использовать
+        # s.vc_packed остается True если был packed
+        s.vc_attribute_name = vc_attr_name  # Восстанавливаем имя
 
         # refresh stats
         v,f,t = polycount(obj.data)
@@ -231,19 +411,25 @@ class MLD_OT_bake_mesh(Operator):
 
         safe_mode(obj, prev)
         
-        # Apply packed VC shader if vertex colors were packed
-        if vc_packed:
-            try:
-                from .materials import build_packed_vc_preview_shader
-                build_packed_vc_preview_shader(obj, s)
-                print(f"[MLD] Applied packed VC shader after bake")
-            except Exception as e:
-                print(f"[MLD] Failed to apply packed VC shader: {e}")
+        # Force viewport update to show new material
+        try:
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+                    # Force shading mode update
+                    for space in area.spaces:
+                        if space.type == 'VIEW_3D':
+                            # Переключаем на Material Preview если был Solid
+                            if space.shading.type == 'SOLID':
+                                space.shading.type = 'MATERIAL'
+        except Exception:
+            pass
         
         # Report success with details
-        if vc_packed:
-            vc_name = getattr(s, 'vc_attribute_name', 'Color')
-            self.report({'INFO'}, f"Baked mesh with vertex colors packed to '{vc_name}' and shader applied.")
+        if vc_packed and packed_vc_name:
+            self.report({'INFO'}, f"Baked mesh with vertex colors packed to '{packed_vc_name}' and shader applied.")
+        elif preview_material_created:
+            self.report({'INFO'}, "Baked mesh with preview material created.")
         else:
             self.report({'INFO'}, "Baked mesh.")
         return {'FINISHED'}
