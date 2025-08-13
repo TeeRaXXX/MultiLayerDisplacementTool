@@ -9,80 +9,191 @@ def _any_channel_assigned(s):
     return any(L.vc_channel in {'R','G','B','A'} for L in s.layers)
 
 def _pack_vc_now(obj, s):
-    """Pack selected channels per-loop into PACK_ATTR; fill empty channels with white if option set."""
-    me=obj.data
-    ensure_color_attr(me, PACK_ATTR)
-    nloops=len(me.loops)
-    # build loop arrays per channel
-    per_loop={'R':[0.0]*nloops, 'G':[0.0]*nloops, 'B':[0.0]*nloops, 'A':[1.0]*nloops}
-    # default fill for unassigned
-    default_zero = 1.0 if s.fill_empty_vc_white else 0.0
-    per_loop['R'] = [default_zero]*nloops
-    per_loop['G'] = [default_zero]*nloops
-    per_loop['B'] = [default_zero]*nloops
-    per_loop['A'] = [1.0]*nloops  # alpha default keep 1
-
-    chan_map={'R':None,'G':None,'B':None,'A':None}
-    for i,L in enumerate(s.layers):
-        ch=L.vc_channel
+    """Pack selected channels per-loop into object's vertex colors with proper error handling."""
+    me = obj.data
+    
+    print(f"[MLD] Starting pack VC for object: {obj.name}")
+    print(f"[MLD] Available vertex colors: {[vc.name for vc in me.vertex_colors] if hasattr(me, 'vertex_colors') else 'None'}")
+    
+    # Get or create the main vertex color layer for the object
+    # Use the specified name from settings
+    vc_layer = None
+    vc_name = getattr(s, 'vc_attribute_name', 'Color')
+    
+    # First try to find existing vertex color layer with the exact specified name
+    if hasattr(me, "vertex_colors") and len(me.vertex_colors) > 0:
+        for vc in me.vertex_colors:
+            if vc.name == vc_name:
+                vc_layer = vc
+                print(f"[MLD] Using existing vertex color layer: {vc_layer.name}")
+                break
+    
+    # If not found, create new vertex color layer with the specified name
+    if not vc_layer:
+        try:
+            vc_layer = me.vertex_colors.new(name=vc_name)
+            print(f"[MLD] Created new vertex color layer: {vc_layer.name}")
+        except Exception as e:
+            print(f"[MLD] Failed to create vertex color layer: {e}")
+            return False
+    
+    if not vc_layer:
+        print("[MLD] No vertex color layer available")
+        return False
+    
+    nloops = len(me.loops)
+    
+    # Build per-channel assignments
+    chan_map = {'R': None, 'G': None, 'B': None, 'A': None}
+    for i, L in enumerate(s.layers):
+        ch = getattr(L, 'vc_channel', 'NONE')
         if ch in chan_map and chan_map[ch] is None:
-            chan_map[ch]=i
+            chan_map[ch] = i
+    
+    print(f"[MLD] Channel assignments: {chan_map}")
 
-    for ch, idx in chan_map.items():
-        if idx is None:  # leave default
-            continue
-        L=s.layers[idx]
-        if not L.mask_name or not color_attr_exists(me, L.mask_name):
-            continue
-        for li in range(nloops):
-            per_loop[ch][li]=loop_red(me, L.mask_name, li)
+    # Default fill value
+    default_fill = 1.0 if getattr(s, 'fill_empty_vc_white', False) else 0.0
+    
+    # Build per-loop arrays
+    per_loop = {
+        'R': [default_fill] * nloops, 
+        'G': [default_fill] * nloops, 
+        'B': [default_fill] * nloops, 
+        'A': [1.0] * nloops  # Alpha always 1.0
+    }
 
-    # write
-    if hasattr(me, "color_attributes"):
-        attr = me.color_attributes.get(PACK_ATTR)
+    # Fill assigned channels from mask data
+    for ch, layer_idx in chan_map.items():
+        if layer_idx is None:
+            continue  # Use default fill
+            
+        L = s.layers[layer_idx]
+        mask_name = getattr(L, 'mask_name', '')
+        
+        print(f"[MLD] Processing layer {layer_idx} channel {ch} with mask: {mask_name}")
+        
+        if not mask_name or not color_attr_exists(me, mask_name):
+            print(f"[MLD] Warning: Layer {layer_idx} channel {ch} has no mask: {mask_name}")
+            continue
+        
+        # Read mask data (red channel)
         for li in range(nloops):
-            attr.data[li].color = (per_loop['R'][li], per_loop['G'][li], per_loop['B'][li], per_loop['A'][li])
-    else:
-        vcol = me.vertex_colors.get(PACK_ATTR)
+            try:
+                mask_value = loop_red(me, mask_name, li)
+                if mask_value is not None:
+                    per_loop[ch][li] = float(mask_value)
+            except Exception:
+                pass
+
+    # Write packed data to vertex color layer
+    try:
+        print(f"[MLD] Writing {nloops} loops to vertex color layer: {vc_layer.name}")
         for li in range(nloops):
-            vcol.data[li].color = (per_loop['R'][li], per_loop['G'][li], per_loop['B'][li], per_loop['A'][li])
-    me.update()
-    s.vc_packed=True
+            r = per_loop['R'][li]
+            g = per_loop['G'][li] 
+            b = per_loop['B'][li]
+            a = per_loop['A'][li]
+            vc_layer.data[li].color = (r, g, b, a)
+        
+        me.update()
+        print(f"[MLD] Successfully packed to vertex color layer: {vc_layer.name}")
+        s.vc_packed = True
+        return True
+        
+    except Exception as e:
+        print(f"[MLD] Pack VC failed: {e}")
+        return False
 
 def _cleanup_after_bake(obj):
-    me=obj.data
-    # remove MLD mask attributes
+    me = obj.data
+    removed_attrs = []
+    
+    # Remove MLD mask attributes (both color_attributes and vertex_colors)
     if hasattr(me, "color_attributes"):
         for a in list(me.color_attributes):
-            if a.name.startswith("MLD_Mask_"):
-                try: me.color_attributes.remove(a)
-                except Exception: pass
-    elif hasattr(me, "vertex_colors"):
+            try:
+                if a.name.startswith("MLD_Mask_"):
+                    attr_name = a.name  # Save name before removal
+                    me.color_attributes.remove(a)
+                    removed_attrs.append(f"color_attr:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove color attribute: {e}")
+    
+    if hasattr(me, "vertex_colors"):
         for a in list(me.vertex_colors):
-            if a.name.startswith("MLD_Mask_"):
-                try: me.vertex_colors.remove(a)
-                except Exception: pass
-    # remove alpha attrs (if somehow present on object)
+            try:
+                if a.name.startswith("MLD_Mask_"):
+                    attr_name = a.name  # Save name before removal
+                    me.vertex_colors.remove(a)
+                    removed_attrs.append(f"vertex_color:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove vertex color: {e}")
+    
+    # Remove MLD displacement attributes
     if hasattr(me, "attributes"):
         for a in list(me.attributes):
-            if a.name.startswith(ALPHA_PREFIX):
-                try: me.attributes.remove(a)
-                except Exception: pass
+            try:
+                if a.name.startswith("MLD_") and a.data_type == 'FLOAT_VECTOR':
+                    attr_name = a.name  # Save name before removal
+                    me.attributes.remove(a)
+                    removed_attrs.append(f"displacement:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove displacement attribute: {e}")
+    
+    # Remove alpha attributes (if somehow present on object)
+    if hasattr(me, "attributes"):
+        for a in list(me.attributes):
+            try:
+                if a.name.startswith(ALPHA_PREFIX):
+                    attr_name = a.name  # Save name before removal
+                    me.attributes.remove(a)
+                    removed_attrs.append(f"alpha:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove alpha attribute: {e}")
+    
+    # Remove MLD_Pack attribute if it exists (from old implementation)
+    if hasattr(me, "color_attributes"):
+        pack_attr = me.color_attributes.get(PACK_ATTR)
+        if pack_attr:
+            try:
+                attr_name = pack_attr.name  # Save name before removal
+                me.color_attributes.remove(pack_attr)
+                removed_attrs.append(f"pack_attr:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove pack attribute: {e}")
+    
+    if hasattr(me, "vertex_colors"):
+        pack_vc = me.vertex_colors.get(PACK_ATTR)
+        if pack_vc:
+            try:
+                attr_name = pack_vc.name  # Save name before removal
+                me.vertex_colors.remove(pack_vc)
+                removed_attrs.append(f"pack_vc:{attr_name}")
+            except Exception as e:
+                print(f"[MLD] Failed to remove pack vertex color: {e}")
+    
     me.update()
+    
+    if removed_attrs:
+        print(f"[MLD] Cleaned up attributes: {', '.join(removed_attrs)}")
+    else:
+        print("[MLD] No MLD attributes found to clean up")
 
 class MLD_OT_bake_mesh(Operator):
     bl_idname = "mld.bake_mesh"
     bl_label = "Bake Mesh"
-    bl_description = "Apply Subdiv/GN/Decimate, pack VC if channels chosen, remove layer attributes and carrier, clear settings"
+    bl_description = "Apply Subdiv/GN/Decimate, pack masks to vertex colors if channels assigned, remove layer attributes and carrier, clear settings"
 
     def execute(self, context):
         obj=active_obj(context)
         if not obj or obj.type!='MESH': return {'CANCELLED'}
         s=obj.mld_settings
 
-        # pack VC if any channel assigned
+        # FIRST: pack VC if any channel assigned (before removing attributes)
+        vc_packed = False
         if _any_channel_assigned(s):
-            _pack_vc_now(obj, s)
+            vc_packed = _pack_vc_now(obj, s)
 
         prev = safe_mode(obj, 'OBJECT')
 
@@ -106,6 +217,7 @@ class MLD_OT_bake_mesh(Operator):
                     bpy.data.meshes.remove(me, do_unlink=True)
             except Exception: pass
 
+        # THEN: cleanup attributes after packing is done
         _cleanup_after_bake(obj)
 
         # clear settings (layers etc.)
@@ -118,7 +230,22 @@ class MLD_OT_bake_mesh(Operator):
         s.last_poly_v, s.last_poly_f, s.last_poly_t = v,f,t
 
         safe_mode(obj, prev)
-        self.report({'INFO'},"Baked mesh.")
+        
+        # Apply packed VC shader if vertex colors were packed
+        if vc_packed:
+            try:
+                from .materials import build_packed_vc_preview_shader
+                build_packed_vc_preview_shader(obj, s)
+                print(f"[MLD] Applied packed VC shader after bake")
+            except Exception as e:
+                print(f"[MLD] Failed to apply packed VC shader: {e}")
+        
+        # Report success with details
+        if vc_packed:
+            vc_name = getattr(s, 'vc_attribute_name', 'Color')
+            self.report({'INFO'}, f"Baked mesh with vertex colors packed to '{vc_name}' and shader applied.")
+        else:
+            self.report({'INFO'}, "Baked mesh.")
         return {'FINISHED'}
 
 classes=(MLD_OT_bake_mesh,)

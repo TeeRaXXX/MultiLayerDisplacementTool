@@ -472,12 +472,18 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         else:
             col.label(text="No channels assigned", icon='ERROR')
         
+        col.prop(s, "vc_attribute_name", text="Attribute Name")
         col.prop(s, "fill_empty_vc_white", text="Fill empty with white")
         
         # Pack button - only enabled if channels are assigned
         pack_row = col.row()
         pack_row.enabled = len(assigned_channels) > 0
         _op(pack_row, "mld.pack_vcols", text="Pack to Vertex Colors", icon='GROUP_VCOL')
+        
+        # Apply Packed VC Shader button
+        shader_row = col.row()
+        shader_row.enabled = len(assigned_channels) > 0
+        _op(shader_row, "mld.apply_packed_vc_shader", text="Apply Packed VC Shader", icon='MATERIAL')
 
         # 12) Bake
         row = layout.row(align=True); row.enabled = not painting

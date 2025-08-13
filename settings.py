@@ -14,7 +14,7 @@ from .constants import (
     DEFAULT_AUTO_ASSIGN_MATERIALS, DEFAULT_MASK_THRESHOLD, DEFAULT_ASSIGN_THRESHOLD,
     DEFAULT_PREVIEW_ENABLE, DEFAULT_PREVIEW_BLEND, DEFAULT_PREVIEW_MASK_INFLUENCE, DEFAULT_PREVIEW_CONTRAST,
     DEFAULT_DECIMATE_ENABLE, DEFAULT_DECIMATE_RATIO,
-    DEFAULT_FILL_EMPTY_VC_WHITE,
+    DEFAULT_FILL_EMPTY_VC_WHITE, DEFAULT_VC_ATTRIBUTE_NAME,
     DEFAULT_LAST_POLY_V, DEFAULT_LAST_POLY_F, DEFAULT_LAST_POLY_T,
     DEFAULT_LAYER_ENABLED, DEFAULT_LAYER_NAME, DEFAULT_LAYER_MULTIPLIER, 
     DEFAULT_LAYER_BIAS, DEFAULT_LAYER_TILING, DEFAULT_LAYER_MASK_NAME, DEFAULT_LAYER_VC_CHANNEL
@@ -347,6 +347,10 @@ class MLD_Settings(PropertyGroup):
     fill_empty_vc_white: BoolProperty(
         name="Fill empty VC channels with white", default=DEFAULT_FILL_EMPTY_VC_WHITE,
         description="When packing VC, fill unassigned channels with white (1.0). If all channels are used, this is ignored",
+    )
+    vc_attribute_name: StringProperty(
+        name="VC Attribute Name", default=DEFAULT_VC_ATTRIBUTE_NAME,
+        description="Name of the vertex color attribute to pack into (e.g., 'Col', 'Color', 'VertexColor')",
     )
     
     # Polycount tracking (for UI display)

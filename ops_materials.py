@@ -126,3 +126,75 @@ def register():
 
 def unregister():
     bpy.utils.unregister_class(MLD_OT_assign_materials)
+
+
+class MLD_OT_apply_packed_vc_shader(Operator):
+    """Apply shader that works with packed vertex colors after mesh bake."""
+    bl_idname = "mld.apply_packed_vc_shader"
+    bl_label = "Apply Packed VC Shader"
+    bl_description = "Create and apply a shader that reads from packed vertex colors"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = active_obj(context)
+        if not obj or obj.type != 'MESH':
+            self.report({'ERROR'}, "Select a mesh object.")
+            return {'CANCELLED'}
+        
+        s = obj.mld_settings
+        
+        # Check if we have packed vertex colors
+        vc_name = getattr(s, 'vc_attribute_name', 'Color')
+        if not hasattr(obj.data, "vertex_colors") or not obj.data.vertex_colors:
+            self.report({'ERROR'}, "No vertex colors found on mesh. Run Bake Mesh first.")
+            return {'CANCELLED'}
+        
+        # Check if the specific vertex color exists
+        vc_layer = None
+        for vc in obj.data.vertex_colors:
+            if vc.name == vc_name:
+                vc_layer = vc
+                break
+        
+        if not vc_layer:
+            self.report({'ERROR'}, f"Packed vertex color '{vc_name}' not found. Run Bake Mesh first.")
+            return {'CANCELLED'}
+        
+        # Check if we have layers with VC channel assignments
+        has_assignments = False
+        for L in s.layers:
+            if getattr(L, "vc_channel", 'NONE') in {'R', 'G', 'B', 'A'}:
+                has_assignments = True
+                break
+        
+        if not has_assignments:
+            self.report({'ERROR'}, "No layers with VC channel assignments found.")
+            return {'CANCELLED'}
+        
+        # Import and apply the shader
+        try:
+            from .materials import build_packed_vc_preview_shader
+            mat = build_packed_vc_preview_shader(obj, s)
+            
+            if mat:
+                self.report({'INFO'}, f"Applied packed VC shader using '{vc_name}' attribute")
+                return {'FINISHED'}
+            else:
+                self.report({'ERROR'}, "Failed to create packed VC shader")
+                return {'CANCELLED'}
+                
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to apply packed VC shader: {e}")
+            return {'CANCELLED'}
+
+
+# Update register/unregister
+classes = (MLD_OT_assign_materials, MLD_OT_apply_packed_vc_shader)
+
+def register():
+    for c in classes:
+        bpy.utils.register_class(c)
+
+def unregister():
+    for c in reversed(classes):
+        bpy.utils.unregister_class(c)

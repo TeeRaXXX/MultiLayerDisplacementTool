@@ -50,6 +50,7 @@ DEFAULT_DECIMATE_RATIO = 0.1
 
 # Vertex color packing settings defaults
 DEFAULT_FILL_EMPTY_VC_WHITE = False
+DEFAULT_VC_ATTRIBUTE_NAME = "Color"
 
 # Polycount tracking defaults
 DEFAULT_LAST_POLY_V = 0

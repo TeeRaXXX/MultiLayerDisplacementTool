@@ -346,3 +346,292 @@ def build_heightlerp_preview_shader(obj: bpy.types.Object, s,
 def ensure_preview_material(obj: bpy.types.Object, s) -> None:
     """Build the HeightLerp-style preview material for the object."""
     build_heightlerp_preview_shader(obj, s)
+
+
+def build_packed_vc_preview_shader(obj: bpy.types.Object, s) -> bpy.types.Material:
+    """
+    Create a shader that reads from packed vertex colors and blends materials.
+    Simplified version: create attribute node with name "Color", output separate XYZ, use XYZ as masks.
+    """
+    try:
+        if not obj or obj.type != 'MESH':
+            return None
+            
+        me = obj.data
+        vc_name = getattr(s, 'vc_attribute_name', 'Color')
+        
+        print(f"[MLD] Starting build_packed_vc_preview_shader for object: {obj.name}")
+        print(f"[MLD] Using vertex color attribute: {vc_name}")
+        
+        # Get UV layer name
+        uv_name = "UVMap"
+        if me.uv_layers:
+            uv_name = me.uv_layers[0].name
+        print(f"[MLD] UV layer name: {uv_name}")
+        
+        # Get layers with VC channel assignments
+        layers = []
+        channel_assignments = {}
+        
+        for i, L in enumerate(s.layers):
+            enabled = getattr(L, "enabled", False)
+            material = getattr(L, "material", None)
+            vc_channel = getattr(L, "vc_channel", 'NONE')
+            
+            print(f"[MLD] Layer {i}: enabled={enabled}, material={material.name if material else 'None'}, vc_channel={vc_channel}")
+            
+            if enabled and material:
+                if vc_channel in {'R', 'G', 'B', 'A'}:
+                    layers.append(L)
+                    channel_assignments[vc_channel] = i
+                    print(f"[MLD] Added layer {i} with channel {vc_channel}")
+
+        print(f"[MLD] Valid layers with VC channels: {len(layers)}")
+        print(f"[MLD] Channel assignments: {channel_assignments}")
+        
+        if not layers:
+            print("[MLD] No layers with VC channel assignments found")
+            return None
+
+        # Create/clear preview material
+        mat_name = f"MLD_PackedVC::{obj.name}"
+        print(f"[MLD] Creating material: {mat_name}")
+        
+        mat = bpy.data.materials.get(mat_name)
+        if not mat:
+            mat = bpy.data.materials.new(mat_name)
+            mat.use_nodes = True
+            print(f"[MLD] Created new material: {mat.name}")
+        else:
+            print(f"[MLD] Using existing material: {mat.name}")
+        
+        nt = mat.node_tree
+        nodes, links = nt.nodes, nt.links
+        nodes.clear()
+        print(f"[MLD] Cleared material nodes")
+
+        # Output and BSDF
+        print(f"[MLD] Creating output and BSDF nodes")
+        out = nodes.new("ShaderNodeOutputMaterial")
+        out.location = (900, 0)
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.location = (680, 0)
+        bsdf.inputs["Roughness"].default_value = 0.5
+        links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+        # UV Map
+        print(f"[MLD] Creating UV Map node")
+        uv = nodes.new("ShaderNodeUVMap")
+        uv.location = (-520, 0)
+        uv.uv_map = uv_name
+
+        # Create attribute node with name "Color" (as per user instruction)
+        print(f"[MLD] Creating attribute node with name: {vc_name}")
+        vc_attr = nodes.new("ShaderNodeAttribute")
+        vc_attr.location = (-520, -200)
+        vc_attr.attribute_name = vc_name
+        print(f"[MLD] Created attribute node: {vc_attr.type} with name: {vc_name}")
+
+        # Separate XYZ from the attribute (as per user instruction)
+        print(f"[MLD] Creating separate XYZ node")
+        sep_rgb = nodes.new("ShaderNodeSeparateRGB")
+        sep_rgb.location = (-300, -200)
+        links.new(vc_attr.outputs["Color"], sep_rgb.inputs["Color"])
+        print(f"[MLD] Connected attribute to separate XYZ")
+
+        # Get preview parameters
+        infl, contr = _get_preview_params(s)
+        use_simple_blend = getattr(s, "preview_blend", False)
+
+        layered_col = None
+        y = 0
+
+        if use_simple_blend:
+            # Simple additive blend mode
+            for idx, L in enumerate(layers):
+                base_img, h_img = _layer_images(L)
+                vc_channel = getattr(L, "vc_channel", 'NONE')
+                
+                if vc_channel not in channel_assignments:
+                    continue
+
+                # Color source for this layer
+                color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
+                                       loc=(-260, y), non_color=False)
+                color_socket = color_node.outputs["Color"]
+
+                # Get mask value from packed vertex color channel (use XYZ outputs as masks)
+                if vc_channel == 'R':
+                    mask_socket = sep_rgb.outputs["R"]
+                elif vc_channel == 'G':
+                    mask_socket = sep_rgb.outputs["G"]
+                elif vc_channel == 'B':
+                    mask_socket = sep_rgb.outputs["B"]
+                elif vc_channel == 'A':
+                    mask_socket = sep_rgb.outputs["A"]
+                else:
+                    continue
+
+                # Apply mask influence
+                mul_infl = nodes.new("ShaderNodeMath")
+                mul_infl.location = (120, y)
+                mul_infl.operation = 'MULTIPLY'
+                mul_infl.inputs[1].default_value = float(infl)
+                links.new(mask_socket, mul_infl.inputs[0])
+
+                # Clamp to 0-1
+                clamp = nodes.new("ShaderNodeClamp")
+                clamp.location = (260, y)
+                links.new(mul_infl.outputs["Value"], clamp.inputs["Value"])
+
+                if layered_col is None:
+                    layered_col = color_socket
+                else:
+                    # Blend with previous layer
+                    mix = nodes.new("ShaderNodeMixRGB")
+                    mix.location = (480, y)
+                    mix.blend_type = 'MIX'
+                    links.new(clamp.outputs["Result"], mix.inputs["Fac"])
+                    links.new(layered_col, mix.inputs["Color1"])
+                    links.new(color_socket, mix.inputs["Color2"])
+                    layered_col = mix.outputs["Color"]
+
+                y -= 260
+        else:
+            # HeightLerp blend mode
+            layered_h = None
+            
+            for idx, L in enumerate(layers):
+                base_img, h_img = _layer_images(L)
+                vc_channel = getattr(L, "vc_channel", 'NONE')
+                
+                if vc_channel not in channel_assignments:
+                    continue
+
+                # Color source for this layer
+                color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
+                                       loc=(-260, y), non_color=False)
+                color_socket = color_node.outputs["Color"]
+
+                # Height source (Non-Color)
+                h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
+                                   loc=(-260, y - 180), non_color=True)
+                h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
+                                          getattr(L, "multiplier", 1.0), getattr(L, "bias", 0.0),
+                                          loc=(-260, y - 180))
+
+                # Get mask value from packed vertex color channel (use XYZ outputs as masks)
+                if vc_channel == 'R':
+                    mask_socket = sep_rgb.outputs["R"]
+                elif vc_channel == 'G':
+                    mask_socket = sep_rgb.outputs["G"]
+                elif vc_channel == 'B':
+                    mask_socket = sep_rgb.outputs["B"]
+                elif vc_channel == 'A':
+                    mask_socket = sep_rgb.outputs["A"]
+                else:
+                    continue
+
+                # Apply mask influence
+                mul_infl = nodes.new("ShaderNodeMath")
+                mul_infl.location = (120, y)
+                mul_infl.operation = 'MULTIPLY'
+                mul_infl.inputs[1].default_value = float(infl)
+                links.new(mask_socket, mul_infl.inputs[0])
+
+                # Clamp to 0-1
+                clamp = nodes.new("ShaderNodeClamp")
+                clamp.location = (260, y)
+                links.new(mul_infl.outputs["Value"], clamp.inputs["Value"])
+
+                if layered_col is None:
+                    layered_col = color_socket
+                    layered_h = h_scalar
+                else:
+                    # Height delta term: (H_B - H_A) * Contrast
+                    sub = nodes.new("ShaderNodeMath")
+                    sub.location = (160, y - 180)
+                    sub.operation = 'SUBTRACT'
+                    links.new(h_scalar, sub.inputs[0])      # H_B
+                    links.new(layered_h, sub.inputs[1])     # H_A
+
+                    mulC = nodes.new("ShaderNodeMath")
+                    mulC.location = (300, y - 180)
+                    mulC.operation = 'MULTIPLY'
+                    mulC.inputs[1].default_value = float(contr)
+                    links.new(sub.outputs["Value"], mulC.inputs[0])
+
+                    # Combine mask and height influence
+                    addm = nodes.new("ShaderNodeMath")
+                    addm.location = (440, y - 120)
+                    addm.operation = 'ADD'
+                    links.new(clamp.outputs["Result"], addm.inputs[0])
+                    links.new(mulC.outputs["Value"], addm.inputs[1])
+
+                    # Ensure minimum visibility
+                    max_node = nodes.new("ShaderNodeMath")
+                    max_node.location = (520, y - 120)
+                    max_node.operation = 'MAXIMUM'
+                    max_node.inputs[1].default_value = 0.1
+                    links.new(addm.outputs["Value"], max_node.inputs[0])
+
+                    fac = nodes.new("ShaderNodeClamp")
+                    fac.location = (660, y - 120)
+                    links.new(max_node.outputs["Value"], fac.inputs["Value"])
+
+                    # Blend color
+                    mix = nodes.new("ShaderNodeMixRGB")
+                    mix.location = (560, y)
+                    mix.blend_type = 'MIX'
+                    links.new(fac.outputs["Result"], mix.inputs["Fac"])
+                    links.new(layered_col, mix.inputs["Color1"])
+                    links.new(color_socket, mix.inputs["Color2"])
+                    layered_col = mix.outputs["Color"]
+
+                    # Propagate height for next iteration
+                    inv = nodes.new("ShaderNodeMath")
+                    inv.location = (520, y - 220)
+                    inv.operation = 'SUBTRACT'
+                    inv.inputs[0].default_value = 1.0
+                    links.new(fac.outputs["Result"], inv.inputs[1])
+
+                    aterm = nodes.new("ShaderNodeMath")
+                    aterm.location = (680, y - 210)
+                    aterm.operation = 'MULTIPLY'
+                    links.new(layered_h, aterm.inputs[0])
+                    links.new(inv.outputs["Value"], aterm.inputs[1])
+
+                    bterm = nodes.new("ShaderNodeMath")
+                    bterm.location = (820, y - 210)
+                    bterm.operation = 'MULTIPLY'
+                    links.new(h_scalar, bterm.inputs[0])
+                    links.new(fac.outputs["Result"], bterm.inputs[1])
+
+                    hmix = nodes.new("ShaderNodeMath")
+                    hmix.location = (960, y - 210)
+                    hmix.operation = 'ADD'
+                    links.new(aterm.outputs["Value"], hmix.inputs[0])
+                    links.new(bterm.outputs["Value"], hmix.inputs[1])
+
+                    layered_h = hmix.outputs.get("Result") or hmix.outputs.get("Value") or hmix.outputs[0]
+
+                y -= 260
+
+        # Drive BaseColor
+        if layered_col:
+            links.new(layered_col, bsdf.inputs["Base Color"])
+
+        # Assign material to slot 0
+        print(f"[MLD] Assigning material to object")
+        _assign_preview_slot0(obj, mat)
+        
+        print(f"[MLD] Created packed VC preview shader using '{vc_name}' attribute")
+        print(f"[MLD] Material '{mat.name}' assigned to object '{obj.name}'")
+        print(f"[MLD] build_packed_vc_preview_shader completed successfully")
+        return mat
+        
+    except Exception as e:
+        print(f"[MLD] Error in build_packed_vc_preview_shader: {e}")
+        import traceback
+        traceback.print_exc()
+        return None

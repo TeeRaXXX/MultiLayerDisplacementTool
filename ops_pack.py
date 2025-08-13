@@ -14,32 +14,34 @@ def _pack_vc_now(obj, s):
     """Pack selected channels per-loop into object's vertex colors with proper error handling."""
     me = obj.data
     
-    # Get or create the main vertex color layer for the object
-    # Use the first available vertex color layer or create a new one
-    vc_layer = None
+    print(f"[MLD] Starting pack VC for object: {obj.name}")
+    print(f"[MLD] Available vertex colors: {[vc.name for vc in me.vertex_colors] if hasattr(me, 'vertex_colors') else 'None'}")
     
-    # Try to find existing vertex color layer
+    # Get or create the main vertex color layer for the object
+    # Use the specified name from settings
+    vc_layer = None
+    vc_name = getattr(s, 'vc_attribute_name', 'Color')
+    
+    # First try to find existing vertex color layer with the exact specified name
     if hasattr(me, "vertex_colors") and len(me.vertex_colors) > 0:
-        # Use the first VC layer, or try to find one with a specific name
         for vc in me.vertex_colors:
-            if vc.name == "MLD_Packed" or vc.name == "Col":
+            if vc.name == vc_name:
                 vc_layer = vc
+                print(f"[MLD] Using existing vertex color layer: {vc_layer.name}")
                 break
-        if not vc_layer:
-            vc_layer = me.vertex_colors[0]  # Use first VC layer
-        print(f"[MLD] Using existing vertex color layer: {vc_layer.name}")
-    else:
-        # Create new vertex color layer
+    
+    # If not found, create new vertex color layer with the specified name
+    if not vc_layer:
         try:
-            vc_layer = me.vertex_colors.new(name="MLD_Packed")
+            vc_layer = me.vertex_colors.new(name=vc_name)
             print(f"[MLD] Created new vertex color layer: {vc_layer.name}")
         except Exception as e:
             print(f"[MLD] Failed to create vertex color layer: {e}")
-            return False
+            return False, None
     
     if not vc_layer:
         print("[MLD] No vertex color layer available")
-        return False
+        return False, None
     
     nloops = len(me.loops)
     
@@ -49,6 +51,8 @@ def _pack_vc_now(obj, s):
         ch = getattr(L, 'vc_channel', 'NONE')
         if ch in chan_map and chan_map[ch] is None:
             chan_map[ch] = i
+    
+    print(f"[MLD] Channel assignments: {chan_map}")
 
     # Default fill value
     default_fill = 1.0 if getattr(s, 'fill_empty_vc_white', False) else 0.0
@@ -69,6 +73,8 @@ def _pack_vc_now(obj, s):
         L = s.layers[layer_idx]
         mask_name = getattr(L, 'mask_name', '')
         
+        print(f"[MLD] Processing layer {layer_idx} channel {ch} with mask: {mask_name}")
+        
         if not mask_name or not color_attr_exists(me, mask_name):
             print(f"[MLD] Warning: Layer {layer_idx} channel {ch} has no mask: {mask_name}")
             continue
@@ -84,6 +90,7 @@ def _pack_vc_now(obj, s):
 
     # Write packed data to vertex color layer
     try:
+        print(f"[MLD] Writing {nloops} loops to vertex color layer: {vc_layer.name}")
         for li in range(nloops):
             r = per_loop['R'][li]
             g = per_loop['G'][li] 
@@ -92,11 +99,12 @@ def _pack_vc_now(obj, s):
             vc_layer.data[li].color = (r, g, b, a)
         
         me.update()
-        return True
+        print(f"[MLD] Successfully packed to vertex color layer: {vc_layer.name}")
+        return True, vc_layer.name
         
     except Exception as e:
         print(f"[MLD] Pack VC failed: {e}")
-        return False
+        return False, None
 
 class MLD_OT_pack_vcols(Operator):
     bl_idname = "mld.pack_vcols"
@@ -135,16 +143,14 @@ class MLD_OT_pack_vcols(Operator):
         print(f"[MLD] Packing masks to vertex colors: {', '.join(assignments)}")
         
         # Perform packing
-        success = _pack_vc_now(obj, s)
+        success, vc_layer_name = _pack_vc_now(obj, s)
         
         if success:
             # Mark as packed
             s.vc_packed = True
             
-            # Get the vertex color layer name for reporting
-            vc_layer_name = "vertex colors"
-            if hasattr(obj.data, "vertex_colors") and len(obj.data.vertex_colors) > 0:
-                vc_layer_name = obj.data.vertex_colors[0].name
+            print(f"[MLD] Packing completed successfully to: {vc_layer_name}")
+            print(f"[MLD] All vertex colors after packing: {[vc.name for vc in obj.data.vertex_colors]}")
             
             # Report success
             pack_info = ', '.join(assignments)
