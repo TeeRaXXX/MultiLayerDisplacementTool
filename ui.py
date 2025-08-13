@@ -509,8 +509,9 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             if conflict_found:
                 col.label(text=f"⚠ Name conflicts with layer mask", icon='ERROR')
         
-        # Bake button
+        # Bake button - 2x height
         bake_row = col.row()
+        bake_row.scale_y = 2.0
         if getattr(s, "bake_pack_vc", False):
             # Check if channels are assigned when pack VC is enabled
             assigned_channels = []

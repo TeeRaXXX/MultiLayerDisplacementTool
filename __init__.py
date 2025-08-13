@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Multi Layer Displacement Tool",
     "author": "Igor Tikhomirov",
-    "version": (1, 4, 0),  # Увеличена версия
+    "version": (1, 0, 0),  # Увеличена версия
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar > MLD Tool",
     "description": "Height-fill multi-layer displacement tool (modular).",
