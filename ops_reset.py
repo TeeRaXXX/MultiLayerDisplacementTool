@@ -1,6 +1,6 @@
 import bpy
 from bpy.types import Operator
-from .constants import GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
+from .constants import GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
 
 class MLD_OT_reset_displacement(Operator):
     bl_idname = "mld.reset_displacement"
@@ -12,12 +12,13 @@ class MLD_OT_reset_displacement(Operator):
         if not obj or obj.type != 'MESH':
             return {'CANCELLED'}
         
-        # Remove modifiers
-        for name in (GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
+        # Remove modifiers (добавлен SUBDIV_GN_MOD_NAME)
+        for name in (SUBDIV_GN_MOD_NAME, "MLD_Subdiv", GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:
                 try: 
                     obj.modifiers.remove(md)
+                    print(f"[MLD] Removed modifier: {name}")
                 except Exception: 
                     pass
                     
@@ -30,6 +31,7 @@ class MLD_OT_reset_displacement(Operator):
                 bpy.data.objects.remove(carr, do_unlink=True)
                 if me and me.users == 0:
                     bpy.data.meshes.remove(me, do_unlink=True)
+                print(f"[MLD] Removed carrier: {cname}")
             except Exception:
                 pass
                 

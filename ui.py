@@ -1,4 +1,4 @@
-# ui.py — UI Panel for Multi Layer Displacement Tool (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# ui.py — UI Panel for Multi Layer Displacement Tool (ПОЛНАЯ ОБНОВЛЕННАЯ ВЕРСИЯ)
 from __future__ import annotations
 import bpy
 from bpy.props import IntProperty
@@ -279,8 +279,6 @@ class VIEW3D_PT_mld(bpy.types.Panel):
                     col.label(text=info_line, icon='MESH_DATA')
                 else:
                     col.label(text=info_line, icon='NONE')
-        
-        # Legacy info removed for cleaner UI
 
         # 3) Global parameters
         box = layout.box()
@@ -380,13 +378,13 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         except Exception:
             lab = col.row(align=True); lab.enabled = False; lab.label(text="Reset ops missing")
 
-        # 8) Subdivision refine
+        # 8) Subdivision refine (ОБНОВЛЕННАЯ СЕКЦИЯ С GEOMETRY NODES)
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         
         # Header with info
         header = col.row(align=True)
-        header.label(text="Refine (Subdivision)", icon='MOD_SUBSURF')
+        header.label(text="Refine (Subdivision GN)", icon='GEOMETRY_NODES')  # ОБНОВЛЕНА ИКОНКА
         info_button = header.row()
         info_button.scale_x = 0.5
         info_button.label(text="📝", icon='NONE')  # Indicates changes applied on Recalculate
@@ -399,10 +397,15 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             row.prop(s, "subdiv_view", text="Viewport")
             row.prop(s, "subdiv_render", text="Render")
             
+            # НОВЫЕ параметры subdivision GN
+            col.separator()
+            col.prop(s, "subdiv_preserve_creases", text="Preserve Creases")
+            col.prop(s, "subdiv_smooth_uvs", text="Smooth UVs")
+            
             # Subtle hint
             hint = col.row()
             hint.scale_y = 0.7
-            hint.label(text="Applied on Recalculate", icon='INFO')
+            hint.label(text="Applied via Geometry Nodes on Recalculate", icon='INFO')
 
         # 9) Materials + Preview
         box = layout.box()
@@ -423,6 +426,16 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         
         col.prop(s, "preview_enable", text="Enable Preview")
         if getattr(s, "preview_enable", False):
+            # Preview blend mode
+            col.prop(s, "preview_blend", text="Simple Blend Mode")
+            
+            # Advanced parameters (shown only in advanced mode)
+            if not getattr(s, "preview_blend", False):
+                sub = col.column(align=True)
+                sub.scale_y = 0.9
+                sub.prop(s, "preview_mask_influence", text="Mask Influence")
+                sub.prop(s, "preview_contrast", text="Contrast")
+            
             # Subtle hint
             hint = col.row()
             hint.scale_y = 0.7
@@ -443,6 +456,14 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         if getattr(s, "decimate_enable", False):
             sub = col.row(align=True)
             sub.prop(s, "decimate_ratio", text="Ratio")
+            
+            # Show estimated polycount reduction
+            if getattr(s, "last_poly_t", 0) > 0:
+                estimated_tris = int(s.last_poly_t * getattr(s, "decimate_ratio", 0.5))
+                reduction_pct = (1.0 - getattr(s, "decimate_ratio", 0.5)) * 100
+                hint = sub.row()
+                hint.scale_y = 0.8
+                hint.label(text=f"≈{estimated_tris:,}T (-{reduction_pct:.0f}%)", icon='INFO')
             
             # Subtle hint
             hint = col.row()
@@ -512,6 +533,18 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             bake_row.enabled = True
         _op(bake_row, "mld.bake_mesh", text="Bake Mesh", icon='CHECKMARK')
 
+        # 12) Post-bake tools (показывать только если есть packed VC)
+        if getattr(s, "vc_packed", False):
+            box = layout.box()
+            col = box.column(align=True)
+            col.label(text="Post-Bake Tools", icon='TOOL_SETTINGS')
+            
+            # Show current VC attribute name
+            vc_name = getattr(s, 'vc_attribute_name', 'Color')
+            col.label(text=f"Using: '{vc_name}'", icon='GROUP_VCOL')
+            
+            # Apply shader button
+            _op(col, "mld.apply_packed_vc_shader", text="Apply VC Shader", icon='MATERIAL')
 
 # --------------- register -----------------------------------------------------
 

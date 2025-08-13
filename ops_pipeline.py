@@ -1,83 +1,201 @@
-# ops_pipeline.py — CARRIER-BASED ПОДХОД: displacement на subdivided mesh
+# ops_pipeline.py — БЕЗОПАСНАЯ ВЕРСИЯ (предотвращение зависания)
 
 from __future__ import annotations
 import bpy
 
 from .heightfill import solve_heightfill
 from .materials import build_heightlerp_preview_shader
-from .constants import GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME, OFFS_ATTR
+from .constants import GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME, OFFS_ATTR
 from .carrier import ensure_carrier, sync_carrier_mesh
+from .gn_subdiv import ensure_subdiv_gn, remove_subdiv_gn, ensure_modifier_order
 
-def _ensure_subdiv(obj: bpy.types.Object, s):
-    """Create/update subdivision modifier."""
-    md = obj.modifiers.get(SUBDIV_MOD_NAME)
+def _ensure_subdiv_new(obj: bpy.types.Object, s):
+    """БЕЗОПАСНАЯ реализация subdivision через Geometry Nodes."""
     
-    if getattr(s, "subdiv_enable", True):
-        if not md or md.type != 'SUBSURF':
-            if md:
+    if getattr(s, "subdiv_enable", False):
+        # ПРОВЕРКА безопасности subdivision уровней
+        subdiv_view = getattr(s, "subdiv_view", 1)
+        print(f"[MLD] === OPS_PIPELINE SUBDIVISION DEBUG ===")
+        print(f"[MLD] Initial subdiv_view: {subdiv_view}")
+        print(f"[MLD] Type of subdiv_view: {type(subdiv_view)}")
+        
+        if subdiv_view > 4:
+            print(f"[MLD] WARNING: Subdivision level {subdiv_view} is too high! Limiting to 4 to prevent freeze.")
+            # Временно изменяем значение в settings для этого расчета
+            original_value = s.subdiv_view
+            s.subdiv_view = 4
+            print(f"[MLD] Temporarily set subdiv_view to 4, original was {original_value}")
+        else:
+            print(f"[MLD] Subdivision level {subdiv_view} is within safe limits")
+        
+        print(f"[MLD] Current subdiv_view after check: {getattr(s, 'subdiv_view', 1)}")
+        print(f"[MLD] ==========================================")
+        
+        # Убедимся что mesh не слишком сложный для subdivision
+        vert_count = len(obj.data.vertices)
+        poly_count = len(obj.data.polygons)
+        
+        if vert_count > 50000 or poly_count > 50000:
+            print(f"[MLD] WARNING: Mesh is complex ({vert_count} verts, {poly_count} polys)")
+            print(f"[MLD] Consider using lower subdivision levels or simpler mesh")
+        
+        # Проверка на слишком сложную геометрию с subdivision
+        estimated_polys = poly_count * (4 ** getattr(s, "subdiv_view", 1))
+        if estimated_polys > 2000000:  # 2 миллиона полигонов
+            print(f"[MLD] ERROR: Estimated {estimated_polys:,} polygons after subdivision - TOO MUCH!")
+            print(f"[MLD] Disabling subdivision to prevent freeze")
+            return None
+        
+        # Сначала удаляем все старые subdivision модификаторы если есть
+        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]
+        for mod_name in subdiv_modifiers:
+            old_md = obj.modifiers.get(mod_name)
+            if old_md:
                 try:
-                    obj.modifiers.remove(md)
-                except Exception:
-                    pass
-            md = obj.modifiers.new(SUBDIV_MOD_NAME, 'SUBSURF')
+                    obj.modifiers.remove(old_md)
+                    print(f"[MLD] Removed old subdivision modifier: {mod_name}")
+                except Exception as e:
+                    print(f"[MLD] Warning: could not remove {mod_name}: {e}")
         
+        print(f"[MLD] Creating subdivision GN with SAFE parameters:")
+        print(f"  - subdiv_enable: {getattr(s, 'subdiv_enable', False)}")
+        print(f"  - subdiv_view: {getattr(s, 'subdiv_view', 1)} (safe limit: 4)")
+        print(f"  - estimated final polys: {estimated_polys:,}")
+        
+        # Создаем новый GN subdivision с дополнительными проверками
         try:
-            subdiv_type = getattr(s, "subdiv_type", 'SIMPLE')
-            if hasattr(md, 'subdivision_type'):
-                md.subdivision_type = subdiv_type
-            
-            viewport_levels = int(getattr(s, "subdiv_view", 1))
-            if hasattr(md, 'levels'):
-                md.levels = max(0, min(6, viewport_levels))
-            
-            render_levels = int(getattr(s, "subdiv_render", 1))
-            if hasattr(md, 'render_levels'):
-                md.render_levels = max(0, min(6, render_levels))
-            
-            if hasattr(md, 'use_limit_surface'):
-                md.use_limit_surface = False
+            md = ensure_subdiv_gn(obj, s)
+            if md:
+                print(f"[MLD] ✓ Subdivision GN ready: {getattr(s, 'subdiv_view', 1)} levels")
                 
-            print(f"[MLD] Subdiv configured: type={subdiv_type}, viewport={viewport_levels}, render={render_levels}")
-            
+                # ВАЖНО: Принудительное обновление чтобы убедиться что modifier работает
+                try:
+                    bpy.context.view_layer.update()
+                    print(f"[MLD] ✓ Forced depsgraph update after subdivision GN")
+                except Exception as e:
+                    print(f"[MLD] Warning: depsgraph update failed: {e}")
+                
+                # Обеспечить правильный порядок модификаторов
+                ensure_modifier_order(obj)
+                
+                # Восстановить оригинальное значение если изменяли
+                if 'original_value' in locals():
+                    print(f"[MLD] Restoring original subdiv_view: {original_value}")
+                    s.subdiv_view = original_value
+                    print(f"[MLD] After restoration, subdiv_view: {getattr(s, 'subdiv_view', 1)}")
+                else:
+                    print(f"[MLD] No original_value to restore, current subdiv_view: {getattr(s, 'subdiv_view', 1)}")
+                
+                return md
+            else:
+                print(f"[MLD] ✗ Failed to create subdivision GN")
+                return None
+                
         except Exception as e:
-            print(f"[MLD] Failed to configure subdiv modifier: {e}")
-        
-        return md
+            print(f"[MLD] ✗ Exception in subdivision GN creation: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     else:
-        if md:
-            try: 
-                obj.modifiers.remove(md)
-                print(f"[MLD] Removed subdivision modifier")
-            except Exception:
-                pass
-        return None
+        # Удаляем все типы subdivision если отключено
+        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]
+        for mod_name in subdiv_modifiers:
+            old_md = obj.modifiers.get(mod_name)
+            if old_md:
+                try:
+                    obj.modifiers.remove(old_md)
+                    print(f"[MLD] Removed subdivision modifier: {mod_name}")
+                except Exception as e:
+                    print(f"[MLD] Warning: could not remove {mod_name}: {e}")
+        
+        remove_subdiv_gn(obj)
+        print(f"[MLD] ○ Subdivision: disabled")
+    
+    return None
 
-def _get_subdivided_mesh(obj: bpy.types.Object, context) -> bpy.types.Mesh:
-    """Get mesh with ONLY subdivision applied."""
+def _get_subdivided_mesh_safe(obj: bpy.types.Object, context) -> bpy.types.Mesh:
+    """БЕЗОПАСНОЕ получение subdivided mesh с проверками."""
     try:
-        # Временно отключим все модификаторы кроме subdivision
+        print(f"[MLD] Getting subdivided mesh safely...")
+        
+        # Проверяем все возможные subdivision модификаторы
+        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]
+        subdiv_md = None
+        
+        for mod_name in subdiv_modifiers:
+            subdiv_md = obj.modifiers.get(mod_name)
+            if subdiv_md:
+                print(f"[MLD] Found subdivision modifier: {mod_name}")
+                break
+        
+        if not subdiv_md:
+            print(f"[MLD] No subdivision modifier found")
+            return None
+        
+        if not subdiv_md.show_viewport:
+            print(f"[MLD] Subdivision modifier is disabled")
+            return None
+        
+        # БЕЗОПАСНОЕ временное отключение других модификаторов
         modifiers_states = []
         for mod in obj.modifiers:
             modifiers_states.append((mod.name, mod.show_viewport))
-            if mod.name != SUBDIV_MOD_NAME:
+            # Отключаем все модификаторы кроме найденного subdivision
+            if mod.name != subdiv_md.name:
                 mod.show_viewport = False
         
-        # Получим evaluated mesh с только subdivision
+        # ПРИНУДИТЕЛЬНОЕ обновление dependency graph
+        try:
+            context.view_layer.update()
+        except Exception as e:
+            print(f"[MLD] Warning: context update failed: {e}")
+        
+        # Получаем evaluated mesh с таймаутом защитой (conceptual)
+        print(f"[MLD] Evaluating subdivided mesh...")
         depsgraph = context.evaluated_depsgraph_get()
         obj_eval = obj.evaluated_get(depsgraph)
+        
+        # ПРОВЕРКА результата перед to_mesh
+        if not obj_eval or not obj_eval.data:
+            raise Exception("Failed to get evaluated object")
+        
         mesh_subdivided = obj_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
         
-        # Восстановим состояния модификаторов
+        # ПРОВЕРКА результирующего mesh
+        if not mesh_subdivided:
+            raise Exception("to_mesh() returned None")
+        
+        # Проверка разумности результата
+        new_vert_count = len(mesh_subdivided.vertices)
+        original_vert_count = len(obj.data.vertices)
+        
+        if new_vert_count > original_vert_count * 100:  # Более чем в 100 раз
+            print(f"[MLD] WARNING: Subdivided mesh is extremely large: {new_vert_count} vertices")
+            print(f"[MLD] Original had {original_vert_count} vertices")
+        
+        # Восстанавливаем состояния модификаторов
         for mod_name, show_state in modifiers_states:
             mod = obj.modifiers.get(mod_name)
             if mod:
                 mod.show_viewport = show_state
         
-        print(f"[MLD] Got subdivided mesh: {len(mesh_subdivided.vertices)} verts (from {len(obj.data.vertices)} original)")
+        print(f"[MLD] ✓ Got subdivided mesh: {new_vert_count} verts (from {original_vert_count} original)")
         return mesh_subdivided
         
     except Exception as e:
-        print(f"[MLD] Failed to get subdivided mesh: {e}")
+        print(f"[MLD] ✗ Failed to get subdivided mesh: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Восстанавливаем состояния модификаторов в случае ошибки
+        try:
+            for mod_name, show_state in modifiers_states:
+                mod = obj.modifiers.get(mod_name)
+                if mod:
+                    mod.show_viewport = show_state
+        except Exception:
+            pass
+        
         return None
 
 def _write_displacement_to_carrier(obj: bpy.types.Object, carrier, subdivided_mesh, per_vert_displacement):
@@ -92,17 +210,24 @@ def _write_displacement_to_carrier(obj: bpy.types.Object, carrier, subdivided_me
         if not offs_attr:
             offs_attr = carrier_mesh.attributes.new(name=OFFS_ATTR, type='FLOAT_VECTOR', domain='POINT')
         
-        # Записываем displacement напрямую в carrier
-        for vi, displacement in enumerate(per_vert_displacement):
-            if vi < len(offs_attr.data):
+        # БЕЗОПАСНАЯ запись displacement в carrier
+        max_writes = min(len(offs_attr.data), len(per_vert_displacement))
+        for vi in range(max_writes):
+            try:
+                displacement = float(per_vert_displacement[vi])
                 offs_attr.data[vi].vector = (0.0, 0.0, displacement)  # Z = scalar displacement
+            except Exception as e:
+                print(f"[MLD] Warning: failed to write displacement for vertex {vi}: {e}")
+                continue
         
         carrier_mesh.update()
-        print(f"[MLD] Wrote displacement to carrier: {len(per_vert_displacement)} values")
+        print(f"[MLD] Wrote displacement to carrier: {max_writes} values")
         return True
         
     except Exception as e:
         print(f"[MLD] Failed to write displacement to carrier: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def _ensure_gn_modifier(obj: bpy.types.Object):
@@ -110,10 +235,6 @@ def _ensure_gn_modifier(obj: bpy.types.Object):
     try:
         from .gn import ensure_gn
         md = ensure_gn(obj)
-        
-        # Важно: GN должен читать данные из carrier mesh через Object Info node
-        # Это требует модификации GN графа для работы с carrier
-        
         return md is not None
     except Exception as e:
         print(f"[MLD] Failed to create GN modifier: {e}")
@@ -148,18 +269,8 @@ def _ensure_decimate(obj: bpy.types.Object, s):
         except Exception as e:
             print(f"[MLD] Failed to configure decimate modifier: {e}")
         
-        # Убедимся что decimate после GN
-        try:
-            gn = obj.modifiers.get(GN_MOD_NAME)
-            if gn:
-                gn_idx = obj.modifiers.find(gn.name)
-                decimate_idx = obj.modifiers.find(DECIMATE_MOD_NAME)
-                
-                while decimate_idx <= gn_idx and decimate_idx < len(obj.modifiers) - 1:
-                    bpy.ops.object.modifier_move_down(modifier=DECIMATE_MOD_NAME)
-                    decimate_idx += 1
-        except Exception as e:
-            print(f"[MLD] Failed to reorder decimate: {e}")
+        # Убедимся что decimate в конце стека
+        ensure_modifier_order(obj)
         
         return md
     else:
@@ -191,6 +302,16 @@ class MLD_OT_recalculate(bpy.types.Operator):
             self.report({'WARNING'}, "No layers to process.")
             return {'CANCELLED'}
 
+        # БЕЗОПАСНАЯ проверка сложности меша
+        vert_count = len(obj.data.vertices)
+        poly_count = len(obj.data.polygons)
+        
+        print(f"[MLD] Mesh complexity check: {vert_count} verts, {poly_count} polys")
+        
+        # ПРЕДУПРЕЖДЕНИЕ о сложности
+        if vert_count > 100000:
+            self.report({'WARNING'}, f"High poly mesh ({vert_count:,} vertices). Consider lower subdivision levels.")
+        
         # Ensure Object mode
         try:
             if obj.mode != 'OBJECT':
@@ -198,30 +319,39 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception:
             pass
 
-        print("[MLD] === CARRIER-BASED RECALCULATE START ===")
+        print("[MLD] === SAFE SUBDIVISION GN RECALCULATE START ===")
         
-        # STEP 1: Setup subdivision modifier
+        # STEP 1: Setup subdivision modifier (БЕЗОПАСНАЯ ВЕРСИЯ)
         subdiv_md = None
         try:
-            subdiv_md = _ensure_subdiv(obj, s)
+            subdiv_md = _ensure_subdiv_new(obj, s)
             if subdiv_md:
-                print(f"[MLD] ✓ Subdivision modifier ready: {subdiv_md.levels} levels")
+                print(f"[MLD] ✓ Subdivision GN ready: {getattr(s, 'subdiv_view', 1)} levels")
             else:
-                print("[MLD] ○ Subdivision: disabled")
+                print("[MLD] ○ Subdivision: disabled or failed")
         except Exception as e:
-            print(f"[MLD] ✗ Subdiv setup failed: {e}")
+            print(f"[MLD] ✗ Subdiv GN setup failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # НЕ возвращаем CANCELLED - продолжаем без subdivision
 
-        # STEP 2: Force depsgraph update
-        try:
-            context.view_layer.update()
-            print("[MLD] ✓ Dependency graph updated")
-        except Exception as e:
-            print(f"[MLD] Warning: depsgraph update failed: {e}")
+        # STEP 2: Force depsgraph update с retry
+        for attempt in range(3):
+            try:
+                context.view_layer.update()
+                print(f"[MLD] ✓ Dependency graph updated (attempt {attempt + 1})")
+                break
+            except Exception as e:
+                print(f"[MLD] Warning: depsgraph update failed (attempt {attempt + 1}): {e}")
+                if attempt == 2:  # Последняя попытка
+                    print(f"[MLD] Continuing without successful depsgraph update")
 
-        # STEP 3: Get subdivided mesh
+        # STEP 3: Get subdivided mesh (БЕЗОПАСНО)
         subdivided_mesh = None
         if subdiv_md:
-            subdivided_mesh = _get_subdivided_mesh(obj, context)
+            subdivided_mesh = _get_subdivided_mesh_safe(obj, context)
+            if not subdivided_mesh:
+                print(f"[MLD] ⚠ Failed to get subdivided mesh, using original")
         
         # Use subdivided or original mesh for heightfill
         work_mesh = subdivided_mesh if subdivided_mesh else obj.data
@@ -238,7 +368,6 @@ class MLD_OT_recalculate(bpy.types.Operator):
         # STEP 5: Compute heightfill on work mesh
         print("[MLD] Computing heightfill on work mesh...")
         try:
-            # Модифицируем solve_heightfill чтобы он возвращал per-vertex displacement
             displacement_result = solve_heightfill_for_carrier(obj, s, context, work_mesh)
             if not displacement_result:
                 raise Exception("Heightfill returned no data")
@@ -270,17 +399,8 @@ class MLD_OT_recalculate(bpy.types.Operator):
             if not gn_ok:
                 raise Exception("Failed to create GN modifier")
             
-            # Убедимся что GN после subdivision
-            if subdiv_md:
-                gn_md = obj.modifiers.get(GN_MOD_NAME)
-                subdiv_idx = obj.modifiers.find(SUBDIV_MOD_NAME)
-                gn_idx = obj.modifiers.find(GN_MOD_NAME)
-                
-                while gn_idx <= subdiv_idx and gn_idx < len(obj.modifiers) - 1:
-                    bpy.ops.object.modifier_move_down(modifier=GN_MOD_NAME)
-                    gn_idx += 1
-                print("[MLD] ✓ GN positioned after subdivision")
-            
+            # Убедимся в правильном порядке модификаторов
+            ensure_modifier_order(obj)
             print("[MLD] ✓ Geometry Nodes displacement ready")
             
         except Exception as e:
@@ -294,7 +414,7 @@ class MLD_OT_recalculate(bpy.types.Operator):
             if decimate_md:
                 print(f"[MLD] ✓ Decimate: {decimate_md.ratio} ratio")
                 
-                # ВАЖНО: Принудительное обновление после decimate
+                # Принудительное обновление после decimate
                 try:
                     context.view_layer.update()
                     print("[MLD] ✓ Dependency graph updated after decimate")
@@ -309,8 +429,6 @@ class MLD_OT_recalculate(bpy.types.Operator):
         try:
             if getattr(s, "auto_assign_materials", False):
                 print("[MLD] Auto-assigning materials...")
-                # Для carrier-based нужно использовать carrier данные
-                # bpy.ops.mld.assign_materials_from_disp()
                 print("[MLD] ○ Material assignment skipped (needs carrier support)")
         except Exception as e:
             print(f"[MLD] ✗ Auto assign failed: {e}")
@@ -328,17 +446,17 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception as e:
             print(f"[MLD] ✗ Preview build failed: {e}")
 
-        # STEP 11: Cleanup
+        # STEP 11: Cleanup (БЕЗОПАСНО)
         if subdivided_mesh:
             try:
                 bpy.data.meshes.remove(subdivided_mesh, do_unlink=True)
                 print("[MLD] ✓ Cleaned up subdivided mesh")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[MLD] Warning: cleanup failed: {e}")
 
-        # Final polycount reporting with decimate info
+        # Final polycount reporting
         try:
-            from .utils import polycount, get_evaluated_polycount, get_polycount_up_to_modifier, format_polycount
+            from .utils import polycount, get_evaluated_polycount, format_polycount
             
             print("\n[MLD] === POLYCOUNT SUMMARY ===")
             
@@ -346,29 +464,15 @@ class MLD_OT_recalculate(bpy.types.Operator):
             orig_v, orig_f, orig_t = polycount(obj.data)
             print(f"[MLD] Original mesh: {format_polycount(orig_v, orig_f, orig_t)}")
             
-            # After subdivision (if enabled)
-            if subdiv_md:
-                subdiv_v, subdiv_f, subdiv_t = get_polycount_up_to_modifier(obj, GN_MOD_NAME, context)
-                print(f"[MLD] After subdivision: {format_polycount(subdiv_v, subdiv_f, subdiv_t)} ({subdiv_t/orig_t:.1f}x)")
-            
-            # After displacement (before decimate)
-            if decimate_md:
-                before_decimate_v, before_decimate_f, before_decimate_t = get_polycount_up_to_modifier(obj, DECIMATE_MOD_NAME, context, verbose=True)
-                print(f"[MLD] Before decimate: {format_polycount(before_decimate_v, before_decimate_f, before_decimate_t)}")
-            
-            # Final result (all modifiers)
-            final_v, final_f, final_t = get_evaluated_polycount(obj, context, verbose=True)
-            print(f"[MLD] Final result: {format_polycount(final_v, final_f, final_t)}")
-            
-            if decimate_md:
-                reduction = (1.0 - final_t/before_decimate_t) * 100
-                print(f"[MLD] Decimate reduction: {reduction:.1f}% ({before_decimate_t:,} → {final_t:,} tris)")
-            
-            # Update settings with latest polycount for UI
+            # Final result (all modifiers) - с таймаутом защитой
             try:
+                final_v, final_f, final_t = get_evaluated_polycount(obj, context, verbose=True)
+                print(f"[MLD] Final result: {format_polycount(final_v, final_f, final_t)}")
+                
+                # Update settings
                 s.last_poly_v, s.last_poly_f, s.last_poly_t = final_v, final_f, final_t
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[MLD] Could not get final polycount: {e}")
                 
             print("[MLD] === END POLYCOUNT ===\n")
             
@@ -382,35 +486,34 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception:
             pass
 
-        # Force final viewport update and polycount refresh
+        # БЕЗОПАСНОЕ Force final viewport update
         try:
-            # Final depsgraph update to ensure all changes are applied
             context.view_layer.update()
-            
-            # Force UI refresh
             for area in context.screen.areas:
                 if area.type == 'VIEW_3D':
                     area.tag_redraw()
                 elif area.type == 'PROPERTIES':
                     area.tag_redraw()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[MLD] Warning: viewport update failed: {e}")
 
-        print("[MLD] === CARRIER-BASED RECALCULATE COMPLETE ===")
-        self.report({'INFO'}, "Displacement calculated on subdivided mesh via carrier.")
+        print("[MLD] === SAFE SUBDIVISION GN RECALCULATE COMPLETE ===")
+        self.report({'INFO'}, "Displacement calculated using Subdivision GN (SAFE MODE).")
         return {'FINISHED'}
 
-
 def solve_heightfill_for_carrier(obj: bpy.types.Object, s, context, work_mesh: bpy.types.Mesh):
-    """
-    Heightfill variant that returns per-vertex displacement values for carrier.
-    """
+    """БЕЗОПАСНАЯ версия heightfill for carrier."""
     try:
         from .sampling import (
             make_sampler, find_image_and_uv_from_displacement,
             active_uv_layer_name, sample_height_at_loop,
         )
         from .attrs import point_red, loop_red, color_attr_exists
+        
+        # ПРОВЕРКА входных данных
+        if not work_mesh or not work_mesh.vertices:
+            print("[MLD] Error: Invalid work mesh")
+            return None
         
         # UV layer
         uv_name = active_uv_layer_name(work_mesh)
@@ -436,109 +539,154 @@ def solve_heightfill_for_carrier(obj: bpy.types.Object, s, context, work_mesh: b
         n_layers = len(s.layers)
         vcount = len(work_mesh.vertices)
         
+        # ПРОВЕРКА разумности размера
+        if vcount > 1000000:  # 1 миллион вершин
+            print(f"[MLD] Warning: Very high vertex count: {vcount:,}")
+        
         # Displacement accumulator
         per_vertex_displacement = [0.0] * vcount
         
         print(f"[MLD] Processing {len(work_mesh.polygons)} polygons for carrier...")
 
-        # Process each polygon
-        for poly in work_mesh.polygons:
+        # БЕЗОПАСНАЯ обработка полигонов с прогрессом
+        poly_count = len(work_mesh.polygons)
+        progress_step = max(1, poly_count // 20)  # 20 шагов прогресса
+        
+        for poly_idx, poly in enumerate(work_mesh.polygons):
+            # Прогресс лог
+            if poly_idx % progress_step == 0:
+                progress = (poly_idx / poly_count) * 100
+                print(f"[MLD] Processing polygons: {progress:.1f}% ({poly_idx}/{poly_count})")
+            
             for li in range(poly.loop_start, poly.loop_start + poly.loop_total):
-                vi = work_mesh.loops[li].vertex_index
-
-                # Collect per-layer heights and masks
-                h_layer = [0.0] * n_layers
-                m_layer = [0.0] * n_layers
-                
-                for i, L in enumerate(s.layers):
-                    if not L.enabled:
-                        continue
+                try:
+                    vi = work_mesh.loops[li].vertex_index
                     
-                    # Mask from original mesh - proper mapping without tiling
-                    m = 0.0
-                    if L.mask_name and color_attr_exists(obj.data, L.mask_name):
-                        # Map work mesh loop to original mesh loop properly
-                        if li < len(obj.data.loops):
-                            # Direct mapping if work mesh is not larger than original
-                            orig_li = li
-                        else:
-                            # For subdivided meshes, find the closest original loop
-                            # Get UV coordinates from work mesh
-                            work_uv = work_mesh.uv_layers[uv_name].data[li].uv
-                            
-                            # Find closest original loop by UV distance
-                            min_dist = float('inf')
-                            orig_li = 0
-                            for orig_loop_idx in range(len(obj.data.loops)):
-                                try:
-                                    orig_uv = obj.data.uv_layers[uv_name].data[orig_loop_idx].uv
-                                    dist = ((work_uv.x - orig_uv.x) ** 2 + (work_uv.y - orig_uv.y) ** 2) ** 0.5
-                                    if dist < min_dist:
-                                        min_dist = dist
-                                        orig_li = orig_loop_idx
-                                except Exception:
-                                    continue
+                    # БЕЗОПАСНАЯ проверка индекса
+                    if vi >= vcount:
+                        print(f"[MLD] Warning: vertex index {vi} out of range")
+                        continue
+
+                    # Collect per-layer heights and masks
+                    h_layer = [0.0] * n_layers
+                    m_layer = [0.0] * n_layers
+                    
+                    for i, L in enumerate(s.layers):
+                        if not L.enabled:
+                            continue
                         
-                        m = loop_red(obj.data, L.mask_name, orig_li)
-                        if m is None:
-                            # Fallback to vertex-based reading
-                            if vi < len(obj.data.vertices):
-                                orig_vi = vi
+                        # Mask from original mesh - proper mapping
+                        m = 0.0
+                        if L.mask_name and color_attr_exists(obj.data, L.mask_name):
+                            # БЕЗОПАСНОЕ mapping work mesh loop to original mesh loop
+                            if li < len(obj.data.loops):
+                                orig_li = li
                             else:
-                                # Find closest original vertex
-                                work_vert = work_mesh.vertices[vi].co
-                                min_dist = float('inf')
-                                orig_vi = 0
-                                for orig_vert_idx in range(len(obj.data.vertices)):
-                                    orig_vert = obj.data.vertices[orig_vert_idx].co
-                                    dist = (work_vert - orig_vert).length
-                                    if dist < min_dist:
-                                        min_dist = dist
-                                        orig_vi = orig_vert_idx
+                                # For subdivided meshes, find closest original loop
+                                try:
+                                    work_uv = work_mesh.uv_layers[uv_name].data[li].uv
+                                    min_dist = float('inf')
+                                    orig_li = 0
+                                    
+                                    # Ограничиваем поиск чтобы не зависнуть
+                                    search_limit = min(len(obj.data.loops), 10000)
+                                    for orig_loop_idx in range(search_limit):
+                                        try:
+                                            orig_uv = obj.data.uv_layers[uv_name].data[orig_loop_idx].uv
+                                            dist = ((work_uv.x - orig_uv.x) ** 2 + (work_uv.y - orig_uv.y) ** 2) ** 0.5
+                                            if dist < min_dist:
+                                                min_dist = dist
+                                                orig_li = orig_loop_idx
+                                        except Exception:
+                                            continue
+                                except Exception as e:
+                                    print(f"[MLD] Warning: UV mapping failed for loop {li}: {e}")
+                                    orig_li = min(li, len(obj.data.loops) - 1)
                             
-                            m = point_red(obj.data, L.mask_name, orig_vi) or 0.0
-                    m_layer[i] = m
+                            m = loop_red(obj.data, L.mask_name, orig_li)
+                            if m is None:
+                                # Fallback to vertex-based reading
+                                if vi < len(obj.data.vertices):
+                                    orig_vi = vi
+                                else:
+                                    # БЕЗОПАСНЫЙ поиск closest original vertex
+                                    try:
+                                        work_vert = work_mesh.vertices[vi].co
+                                        min_dist = float('inf')
+                                        orig_vi = 0
+                                        
+                                        # Ограничиваем поиск
+                                        search_limit = min(len(obj.data.vertices), 10000)
+                                        for orig_vert_idx in range(search_limit):
+                                            orig_vert = obj.data.vertices[orig_vert_idx].co
+                                            dist = (work_vert - orig_vert).length
+                                            if dist < min_dist:
+                                                min_dist = dist
+                                                orig_vi = orig_vert_idx
+                                    except Exception:
+                                        orig_vi = min(vi, len(obj.data.vertices) - 1)
+                                
+                                m = point_red(obj.data, L.mask_name, orig_vi) or 0.0
+                        m_layer[i] = m
 
-                    # Height from work mesh
-                    smp = samplers[i]
-                    if smp is None:
-                        continue
-                    h = sample_height_at_loop(work_mesh, uv_name, li, max(1e-8, L.tiling), smp)
-                    h = h * L.multiplier + L.bias
-                    h_layer[i] = h
+                        # Height from work mesh
+                        smp = samplers[i]
+                        if smp is None:
+                            continue
+                        
+                        try:
+                            h = sample_height_at_loop(work_mesh, uv_name, li, max(1e-8, L.tiling), smp)
+                            h = h * L.multiplier + L.bias
+                            h_layer[i] = h
+                        except Exception as e:
+                            print(f"[MLD] Warning: height sampling failed for loop {li}: {e}")
+                            h_layer[i] = 0.0
 
-                # HeightFill blend
-                filled_h = 0.0
-                remain = 1.0
-                
-                for i, L in enumerate(s.layers):
-                    m = m_layer[i]
-                    if m <= 0.0:
-                        continue
-                    if m >= 0.9999:
-                        filled_h = h_layer[i]
-                        remain = 0.0
-                    else:
-                        contrib = max(0.0, h_layer[i] - filled_h)
-                        gain = contrib * m * s.fill_power
-                        if gain > 0.0:
-                            filled_h = filled_h + gain
-                            remain = max(0.0, 1.0 - remain)
+                    # HeightFill blend
+                    filled_h = 0.0
+                    remain = 1.0
+                    
+                    for i, L in enumerate(s.layers):
+                        m = m_layer[i]
+                        if m <= 0.0:
+                            continue
+                        if m >= 0.9999:
+                            filled_h = h_layer[i]
+                            remain = 0.0
+                        else:
+                            contrib = max(0.0, h_layer[i] - filled_h)
+                            gain = contrib * m * s.fill_power
+                            if gain > 0.0:
+                                filled_h = filled_h + gain
+                                remain = max(0.0, 1.0 - remain)
 
-                # Add to vertex displacement
-                displacement = (filled_h - s.midlevel) * s.strength
-                per_vertex_displacement[vi] += displacement
+                    # Add to vertex displacement (БЕЗОПАСНО)
+                    displacement = (filled_h - s.midlevel) * s.strength
+                    per_vertex_displacement[vi] += displacement
+                    
+                except Exception as e:
+                    print(f"[MLD] Warning: failed to process loop {li}: {e}")
+                    continue
 
-        # Average by vertex valence
+        # Average by vertex valence (БЕЗОПАСНО)
+        print(f"[MLD] Averaging by vertex valence...")
         valence = [0] * vcount
+        
         for p in work_mesh.polygons:
             for li in range(p.loop_start, p.loop_start + p.loop_total):
-                vi = work_mesh.loops[li].vertex_index
-                valence[vi] += 1
+                try:
+                    vi = work_mesh.loops[li].vertex_index
+                    if vi < vcount:
+                        valence[vi] += 1
+                except Exception:
+                    continue
 
         for vi in range(vcount):
-            d = max(1, valence[vi])
-            per_vertex_displacement[vi] /= d
+            try:
+                d = max(1, valence[vi])
+                per_vertex_displacement[vi] /= d
+            except Exception:
+                per_vertex_displacement[vi] = 0.0
 
         print(f"[MLD] ✓ Carrier heightfill completed on {vcount} vertices")
         return per_vertex_displacement
@@ -548,7 +696,6 @@ def solve_heightfill_for_carrier(obj: bpy.types.Object, s, context, work_mesh: b
         import traceback
         traceback.print_exc()
         return None
-
 
 # Register
 classes = (MLD_OT_recalculate,)

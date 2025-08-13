@@ -1,13 +1,14 @@
-# ops_reset_all.py
+# ops_reset_all.py — ОБНОВЛЕННАЯ ВЕРСИЯ с subdivision GN
 import bpy
 from bpy.types import Operator
 from .utils import active_obj
 from .constants import (
-    GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME,
+    GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME,
     # Default values
     DEFAULT_ACTIVE_INDEX, DEFAULT_PAINTING, DEFAULT_VC_PACKED,
     DEFAULT_STRENGTH, DEFAULT_MIDLEVEL, DEFAULT_FILL_POWER,
     DEFAULT_SUBDIV_ENABLE, DEFAULT_SUBDIV_TYPE, DEFAULT_SUBDIV_VIEW, DEFAULT_SUBDIV_RENDER,
+    DEFAULT_SUBDIV_PRESERVE_CREASES, DEFAULT_SUBDIV_SMOOTH_UVS,  # НОВЫЕ
     DEFAULT_AUTO_ASSIGN_MATERIALS, DEFAULT_MASK_THRESHOLD, DEFAULT_ASSIGN_THRESHOLD,
     DEFAULT_PREVIEW_ENABLE, DEFAULT_PREVIEW_BLEND, DEFAULT_PREVIEW_MASK_INFLUENCE, DEFAULT_PREVIEW_CONTRAST,
     DEFAULT_DECIMATE_ENABLE, DEFAULT_DECIMATE_RATIO,
@@ -36,14 +37,14 @@ class MLD_OT_reset_all(Operator):
                 if layer.material:
                     layer_materials.add(layer.material.name)
         
-        # Find ALL MLD materials in object slots (various prefixes)
+        # Find ALL MLD materials in object slots
         for i, mat in enumerate(obj.data.materials):
             if mat and (
                 mat.name.startswith("MLD_Preview::") or
                 mat.name.startswith("MLD_") or
                 mat.name.startswith("MLD_HeightLerp::") or
                 mat.name.startswith("MLD_Displacement::") or
-                mat.name in layer_materials  # Remove materials assigned to layers
+                mat.name in layer_materials
             ):
                 materials_to_remove.append((i, mat))
                 
@@ -55,7 +56,7 @@ class MLD_OT_reset_all(Operator):
             except Exception:
                 pass
         
-        # Remove unused MLD materials from data (all MLD prefixes + layer materials)
+        # Remove unused MLD materials from data
         mld_materials = [mat for mat in bpy.data.materials 
                          if ((mat.name.startswith("MLD_Preview::") or
                               mat.name.startswith("MLD_") or
@@ -88,12 +89,13 @@ class MLD_OT_reset_all(Operator):
             except Exception:
                 pass
 
-        # Remove modifiers
-        for name in (GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
+        # Remove modifiers (обновлено для subdivision GN)
+        for name in (SUBDIV_GN_MOD_NAME, GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:
                 try:
                     obj.modifiers.remove(md)
+                    print(f"[MLD] Removed modifier: {name}")
                 except Exception:
                     pass
 
@@ -106,10 +108,11 @@ class MLD_OT_reset_all(Operator):
                 bpy.data.objects.remove(carr, do_unlink=True)
                 if me and me.users == 0:
                     bpy.data.meshes.remove(me, do_unlink=True)
+                print(f"[MLD] Removed carrier: {cname}")
             except Exception:
                 pass
 
-        # Remove mask attributes using new cleanup function
+        # Remove mask attributes
         try:
             from .ops_masks import cleanup_mask_attributes
             removed_attrs = cleanup_mask_attributes(obj)
@@ -117,7 +120,7 @@ class MLD_OT_reset_all(Operator):
         except Exception as e:
             print(f"[MLD] Failed to clean attributes: {e}")
 
-        # Remove ALL MLD-related materials from object
+        # Remove ALL MLD-related materials
         try:
             removed_mats = self._remove_all_mld_materials(obj)
             print(f"[MLD] Removed materials: {removed_mats}")
@@ -135,41 +138,46 @@ class MLD_OT_reset_all(Operator):
         s.vc_packed = DEFAULT_VC_PACKED
         s.active_index = DEFAULT_ACTIVE_INDEX
         
-        # Reset global displacement parameters to defaults
+        # Reset global displacement parameters
         s.strength = DEFAULT_STRENGTH
         s.midlevel = DEFAULT_MIDLEVEL
         s.fill_power = DEFAULT_FILL_POWER
         
-        # Reset subdivision settings to defaults
+        # Reset subdivision settings (обновлено)
         s.subdiv_enable = DEFAULT_SUBDIV_ENABLE
         s.subdiv_type = DEFAULT_SUBDIV_TYPE
         s.subdiv_view = DEFAULT_SUBDIV_VIEW
         s.subdiv_render = DEFAULT_SUBDIV_RENDER
+        # Новые subdivision параметры
+        if hasattr(s, 'subdiv_preserve_creases'):
+            s.subdiv_preserve_creases = DEFAULT_SUBDIV_PRESERVE_CREASES
+        if hasattr(s, 'subdiv_smooth_uvs'):
+            s.subdiv_smooth_uvs = DEFAULT_SUBDIV_SMOOTH_UVS
         
-        # Reset material assignment settings to defaults
+        # Reset material assignment settings
         s.auto_assign_materials = DEFAULT_AUTO_ASSIGN_MATERIALS
         s.mask_threshold = DEFAULT_MASK_THRESHOLD
         s.assign_threshold = DEFAULT_ASSIGN_THRESHOLD
         
-        # Reset preview settings to defaults
+        # Reset preview settings
         s.preview_enable = DEFAULT_PREVIEW_ENABLE
         s.preview_blend = DEFAULT_PREVIEW_BLEND
         s.preview_mask_influence = DEFAULT_PREVIEW_MASK_INFLUENCE
         s.preview_contrast = DEFAULT_PREVIEW_CONTRAST
         
-        # Reset decimate settings to defaults
+        # Reset decimate settings
         s.decimate_enable = DEFAULT_DECIMATE_ENABLE
         s.decimate_ratio = DEFAULT_DECIMATE_RATIO
         
-        # Reset vertex color packing settings to defaults
+        # Reset vertex color packing settings
         s.fill_empty_vc_white = DEFAULT_FILL_EMPTY_VC_WHITE
         
-        # Reset polycount tracking to defaults
+        # Reset polycount tracking
         s.last_poly_v = DEFAULT_LAST_POLY_V
         s.last_poly_f = DEFAULT_LAST_POLY_F
         s.last_poly_t = DEFAULT_LAST_POLY_T
 
-        self.report({'INFO'}, "MLD: Reset All done - all settings restored to defaults.")
+        self.report({'INFO'}, "MLD: Reset All done - all settings restored to defaults (Subdivision GN).")
         return {'FINISHED'}
 
 classes = (MLD_OT_reset_all,)

@@ -2,7 +2,8 @@
 
 # Modifier names
 GN_MOD_NAME = "MLD_DisplaceGN"
-SUBDIV_MOD_NAME = "MLD_RefineSubdiv"
+SUBDIV_GN_MOD_NAME = "MLD_SubdivGN"  # НОВАЯ КОНСТАНТА
+SUBDIV_MOD_NAME = "MLD_RefineSubdiv"  # Оставляем для совместимости
 DECIMATE_MOD_NAME = "MLD_Decimate"
 
 # Mesh attribute names
@@ -32,6 +33,8 @@ DEFAULT_SUBDIV_ENABLE = False
 DEFAULT_SUBDIV_TYPE = 'SIMPLE'
 DEFAULT_SUBDIV_VIEW = 1
 DEFAULT_SUBDIV_RENDER = 1
+DEFAULT_SUBDIV_PRESERVE_CREASES = True  # НОВАЯ
+DEFAULT_SUBDIV_SMOOTH_UVS = True       # НОВАЯ
 
 # Material assignment settings defaults
 DEFAULT_AUTO_ASSIGN_MATERIALS = False

@@ -323,13 +323,27 @@ class MLD_OT_bake_mesh(Operator):
         prev = safe_mode(obj, 'OBJECT')
 
         # STEP 3: Apply modifiers in order: Subdiv -> GN -> Decimate
-        for name in (SUBDIV_MOD_NAME, GN_MOD_NAME, DECIMATE_MOD_NAME):
+        # Handle both new Geometry Nodes subdivision and fallback subdivision
+        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]  # Try all possible names
+        for subdiv_name in subdiv_modifiers:
+            md = obj.modifiers.get(subdiv_name)
+            if md:
+                try:
+                    bpy.ops.object.modifier_apply(modifier=subdiv_name)
+                    print(f"[MLD] Applied subdivision modifier: {subdiv_name}")
+                    break
+                except Exception as e:
+                    print(f"[MLD] Failed to apply {subdiv_name}: {e}")
+        
+        # Apply other modifiers
+        for name in (GN_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:
                 try:
                     bpy.ops.object.modifier_apply(modifier=name)
-                except Exception:
-                    pass
+                    print(f"[MLD] Applied modifier: {name}")
+                except Exception as e:
+                    print(f"[MLD] Failed to apply {name}: {e}")
         
         # Verify that preview material is still assigned after modifiers
         if preview_material_created and len(obj.data.materials) > 0:

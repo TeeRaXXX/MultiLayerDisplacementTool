@@ -1,8 +1,7 @@
-
 bl_info = {
     "name": "Multi Layer Displacement Tool",
     "author": "Igor Tikhomirov",
-    "version": (1, 3, 5),
+    "version": (1, 4, 0),  # Увеличена версия
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar > MLD Tool",
     "description": "Height-fill multi-layer displacement tool (modular).",
@@ -12,10 +11,10 @@ bl_info = {
 import bpy, importlib, traceback
 
 _SUBMODULES = [
-    ".constants",".utils",".attrs",".sampling",".materials",".heightfill",".gn",".settings",
-    ".ops_layers",".ops_masks",".ops_materials",".ops_assign_from_disp",".ops_pipeline",
-    ".ops_reset_all",".ops_reset",".ops_bake",".ops_pack",".ops_settings_io",".ops_vc_channels",
-    ".ui",
+    ".constants",".utils",".attrs",".sampling",".materials",".heightfill",".gn",".gn_subdiv",
+    ".settings",".ops_layers",".ops_masks",".ops_materials",".ops_assign_from_disp",
+    ".ops_pipeline",".ops_reset_all",".ops_reset",".ops_bake",".ops_pack",
+    ".ops_settings_io",".ops_vc_channels",".ui",
 ]
 
 _loaded = []

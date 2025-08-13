@@ -1,4 +1,4 @@
-# settings.py — property groups for Multi Layer Displacement Tool (OPTIMIZED)
+# settings.py — property groups for Multi Layer Displacement Tool (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 from __future__ import annotations
 import bpy
 from bpy.types import PropertyGroup
@@ -11,6 +11,7 @@ from .constants import (
     DEFAULT_ACTIVE_INDEX, DEFAULT_PAINTING, DEFAULT_VC_PACKED,
     DEFAULT_STRENGTH, DEFAULT_MIDLEVEL, DEFAULT_FILL_POWER,
     DEFAULT_SUBDIV_ENABLE, DEFAULT_SUBDIV_TYPE, DEFAULT_SUBDIV_VIEW, DEFAULT_SUBDIV_RENDER,
+    DEFAULT_SUBDIV_PRESERVE_CREASES, DEFAULT_SUBDIV_SMOOTH_UVS,  # НОВЫЕ
     DEFAULT_AUTO_ASSIGN_MATERIALS, DEFAULT_MASK_THRESHOLD, DEFAULT_ASSIGN_THRESHOLD,
     DEFAULT_PREVIEW_ENABLE, DEFAULT_PREVIEW_BLEND, DEFAULT_PREVIEW_MASK_INFLUENCE, DEFAULT_PREVIEW_CONTRAST,
     DEFAULT_DECIMATE_ENABLE, DEFAULT_DECIMATE_RATIO,
@@ -49,6 +50,14 @@ def _on_toggle_preview(self, context):
 def _on_preview_param(self, context):
     if getattr(self, "preview_enable", False):
         _preview_rebuild(context.object, self)
+
+def _on_subdiv_setting_change(self, context):
+    """Debug callback for subdivision settings changes."""
+    print(f"[MLD] Subdivision setting changed:")
+    print(f"[MLD]   - subdiv_enable: {getattr(self, 'subdiv_enable', False)}")
+    print(f"[MLD]   - subdiv_view: {getattr(self, 'subdiv_view', 1)}")
+    print(f"[MLD]   - subdiv_render: {getattr(self, 'subdiv_render', 1)}")
+    print(f"[MLD]   - subdiv_type: {getattr(self, 'subdiv_type', 'SIMPLE')}")
 
 # ------------------------------------------------------------------------------
 # Layer switching callback (OPTIMIZED)
@@ -121,7 +130,6 @@ VC_ENUM = [
     ('R', 'R', "Red"),
     ('G', 'G', "Green"),
     ('B', 'B', "Blue"),
-    
 ]
 
 class MLD_Layer(PropertyGroup):
@@ -274,9 +282,9 @@ class MLD_Settings(PropertyGroup):
 
     # Subdivision refine (preview helper)
     subdiv_enable: BoolProperty(
-        name="Enable Subdivision Refine", default=DEFAULT_SUBDIV_ENABLE,
-        description="Enable Subdivision modifier (preview helper) - applied on Recalculate",
-        # НЕТ update callback - изменения применяются только при Recalculate
+        name="Enable", default=DEFAULT_SUBDIV_ENABLE,
+        description="Enable subdivision refine step",
+        update=_on_subdiv_setting_change,
     )
     subdiv_type: EnumProperty(
         name="Type", items=SUBDIV_TYPES, default=DEFAULT_SUBDIV_TYPE,
@@ -286,12 +294,24 @@ class MLD_Settings(PropertyGroup):
     subdiv_view: IntProperty(
         name="Viewport Levels", default=DEFAULT_SUBDIV_VIEW, min=0, soft_max=4,
         description="Subdivision levels in viewport",
-        # НЕТ update callback
+        update=_on_subdiv_setting_change,
     )
     subdiv_render: IntProperty(
         name="Render Levels", default=DEFAULT_SUBDIV_RENDER, min=0, soft_max=4,
         description="Subdivision levels in render",
         # НЕТ update callback
+    )
+
+    # НОВЫЕ subdivision параметры для Geometry Nodes
+    subdiv_preserve_creases: BoolProperty(
+        name="Preserve Creases", default=DEFAULT_SUBDIV_PRESERVE_CREASES,
+        description="Preserve sharp edges and creases during subdivision",
+        # НЕТ update callback - применяется при Recalculate
+    )
+    subdiv_smooth_uvs: BoolProperty(
+        name="Smooth UVs", default=DEFAULT_SUBDIV_SMOOTH_UVS,
+        description="Apply UV smoothing during subdivision",
+        # НЕТ update callback - применяется при Recalculate
     )
 
     # Materials auto-assign after recalc
@@ -377,6 +397,12 @@ class MLD_Settings(PropertyGroup):
         description="Last calculated triangle count (for UI display)",
     )
 
+    # For vc_packed state
+    vc_packed: BoolProperty(
+        name="VC Packed", default=DEFAULT_VC_PACKED,
+        description="Whether vertex colors have been packed",
+    )
+
     # helper to mirror thresholds if needed
     def sync_thresholds(self):
         try:
@@ -433,11 +459,6 @@ class MLD_Settings(PropertyGroup):
         min=0, soft_max=4,
         get=_get_subdiv_levels_render, set=_set_subdiv_levels_render,
         description="Alias of 'subdiv_render' for current UI",
-    )
-    preview_blend: BoolProperty(
-        name="Preview blend (alias)",
-        get=_get_preview_blend, set=_set_preview_blend,
-        description="Alias of 'preview_enable' for current UI",
     )
     mat_assign_threshold: FloatProperty(
         name="Mask Threshold (alias)",
