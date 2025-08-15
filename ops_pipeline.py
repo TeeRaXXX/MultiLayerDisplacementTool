@@ -657,23 +657,22 @@ def solve_heightfill_for_carrier(obj: bpy.types.Object, s, context, work_mesh: b
                             print(f"[MLD] Warning: height sampling failed for loop {li}: {e}")
                             h_layer[i] = 0.0
 
-                    # HeightFill blend
+                    # HeightFill blend - ЛЕРПИНГ по маскам
                     filled_h = 0.0
-                    remain = 1.0
+                    total_weight = 0.0
                     
                     for i, L in enumerate(s.layers):
                         m = m_layer[i]
                         if m <= 0.0:
                             continue
-                        if m >= 0.9999:
-                            filled_h = h_layer[i]
-                            remain = 0.0
-                        else:
-                            contrib = max(0.0, h_layer[i] - filled_h)
-                            gain = contrib * m * s.fill_power
-                            if gain > 0.0:
-                                filled_h = filled_h + gain
-                                remain = max(0.0, 1.0 - remain)
+                        
+                        # Простой лерпинг: взвешенная сумма высот по маскам
+                        filled_h += h_layer[i] * m
+                        total_weight += m
+                    
+                    # Нормализация если есть веса
+                    if total_weight > 0.0:
+                        filled_h /= total_weight
 
                     # Add to vertex displacement (БЕЗОПАСНО)
                     displacement = (filled_h - s.midlevel) * s.strength

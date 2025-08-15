@@ -286,7 +286,6 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         col.label(text="Global Displacement")
         col.prop(s, "strength")
         col.prop(s, "midlevel")
-        col.prop(s, "fill_power")
 
         # 4) Layers list
         box = layout.box()
