@@ -5,73 +5,80 @@ import bpy
 
 from .heightfill import solve_heightfill
 from .materials import build_heightlerp_preview_shader
-from .constants import GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME, OFFS_ATTR
+from .constants import GN_MOD_NAME, MULTIRES_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME, OFFS_ATTR
 from .carrier import ensure_carrier, sync_carrier_mesh
-from .gn_subdiv import ensure_subdiv_gn, remove_subdiv_gn, ensure_modifier_order
+from .gn_multires import ensure_multires_gn, remove_multires_gn, ensure_modifier_order
 
-def _ensure_subdiv_new(obj: bpy.types.Object, s):
-    """БЕЗОПАСНАЯ реализация subdivision через Geometry Nodes."""
+def _ensure_multires_new(obj: bpy.types.Object, s):
+    """БЕЗОПАСНАЯ реализация multiresolution через Geometry Nodes."""
+    
+    print(f"[MLD] === _ensure_multires_new DEBUG ===")
+    print(f"[MLD] Object: {obj.name}")
+    print(f"[MLD] Settings object: {s}")
+    print(f"[MLD] subdiv_enable value: {getattr(s, 'subdiv_enable', False)}")
+    print(f"[MLD] subdiv_enable type: {type(getattr(s, 'subdiv_enable', False))}")
+    print(f"[MLD] ==================================")
     
     if getattr(s, "subdiv_enable", False):
-        # ПРОВЕРКА безопасности subdivision уровней
+        # ПРОВЕРКА безопасности multiresolution уровней
         subdiv_view = getattr(s, "subdiv_view", 1)
-        print(f"[MLD] === OPS_PIPELINE SUBDIVISION DEBUG ===")
+        print(f"[MLD] === OPS_PIPELINE MULTIRESOLUTION DEBUG ===")
         print(f"[MLD] Initial subdiv_view: {subdiv_view}")
         print(f"[MLD] Type of subdiv_view: {type(subdiv_view)}")
         
         if subdiv_view > 4:
-            print(f"[MLD] WARNING: Subdivision level {subdiv_view} is too high! Limiting to 4 to prevent freeze.")
+            print(f"[MLD] WARNING: Multiresolution level {subdiv_view} is too high! Limiting to 4 to prevent freeze.")
             # Временно изменяем значение в settings для этого расчета
             original_value = s.subdiv_view
             s.subdiv_view = 4
             print(f"[MLD] Temporarily set subdiv_view to 4, original was {original_value}")
         else:
-            print(f"[MLD] Subdivision level {subdiv_view} is within safe limits")
+            print(f"[MLD] Multiresolution level {subdiv_view} is within safe limits")
         
         print(f"[MLD] Current subdiv_view after check: {getattr(s, 'subdiv_view', 1)}")
         print(f"[MLD] ==========================================")
         
-        # Убедимся что mesh не слишком сложный для subdivision
+        # Убедимся что mesh не слишком сложный для multiresolution
         vert_count = len(obj.data.vertices)
         poly_count = len(obj.data.polygons)
         
         if vert_count > 50000 or poly_count > 50000:
             print(f"[MLD] WARNING: Mesh is complex ({vert_count} verts, {poly_count} polys)")
-            print(f"[MLD] Consider using lower subdivision levels or simpler mesh")
+            print(f"[MLD] Consider using lower multiresolution levels or simpler mesh")
         
-        # Проверка на слишком сложную геометрию с subdivision
+        # Проверка на слишком сложную геометрию с multiresolution
         estimated_polys = poly_count * (4 ** getattr(s, "subdiv_view", 1))
         if estimated_polys > 2000000:  # 2 миллиона полигонов
-            print(f"[MLD] ERROR: Estimated {estimated_polys:,} polygons after subdivision - TOO MUCH!")
-            print(f"[MLD] Disabling subdivision to prevent freeze")
+            print(f"[MLD] ERROR: Estimated {estimated_polys:,} polygons after multiresolution - TOO MUCH!")
+            print(f"[MLD] Disabling multiresolution to prevent freeze")
             return None
         
-        # Сначала удаляем все старые subdivision модификаторы если есть
-        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]
-        for mod_name in subdiv_modifiers:
+        # Сначала удаляем все старые multiresolution модификаторы если есть
+        multires_modifiers = ["MLD_Multires", "MLD_MultiresGN", SUBDIV_MOD_NAME]  # MLD_Multires в приоритете
+        for mod_name in multires_modifiers:
             old_md = obj.modifiers.get(mod_name)
             if old_md:
                 try:
                     obj.modifiers.remove(old_md)
-                    print(f"[MLD] Removed old subdivision modifier: {mod_name}")
+                    print(f"[MLD] Removed old multiresolution modifier: {mod_name}")
                 except Exception as e:
                     print(f"[MLD] Warning: could not remove {mod_name}: {e}")
         
-        print(f"[MLD] Creating subdivision GN with SAFE parameters:")
+        print(f"[MLD] Creating multiresolution GN with SAFE parameters:")
         print(f"  - subdiv_enable: {getattr(s, 'subdiv_enable', False)}")
         print(f"  - subdiv_view: {getattr(s, 'subdiv_view', 1)} (safe limit: 4)")
         print(f"  - estimated final polys: {estimated_polys:,}")
         
-        # Создаем новый GN subdivision с дополнительными проверками
+        # Создаем новый GN multiresolution с дополнительными проверками
         try:
-            md = ensure_subdiv_gn(obj, s)
+            md = ensure_multires_gn(obj, s)
             if md:
-                print(f"[MLD] ✓ Subdivision GN ready: {getattr(s, 'subdiv_view', 1)} levels")
+                print(f"[MLD] ✓ Multiresolution GN ready: {getattr(s, 'subdiv_view', 1)} levels")
                 
                 # ВАЖНО: Принудительное обновление чтобы убедиться что modifier работает
                 try:
                     bpy.context.view_layer.update()
-                    print(f"[MLD] ✓ Forced depsgraph update after subdivision GN")
+                    print(f"[MLD] ✓ Forced depsgraph update after multiresolution GN")
                 except Exception as e:
                     print(f"[MLD] Warning: depsgraph update failed: {e}")
                 
@@ -88,60 +95,60 @@ def _ensure_subdiv_new(obj: bpy.types.Object, s):
                 
                 return md
             else:
-                print(f"[MLD] ✗ Failed to create subdivision GN")
+                print(f"[MLD] ✗ Failed to create multiresolution GN")
                 return None
                 
         except Exception as e:
-            print(f"[MLD] ✗ Exception in subdivision GN creation: {e}")
+            print(f"[MLD] ✗ Exception in multiresolution GN creation: {e}")
             import traceback
             traceback.print_exc()
             return None
     else:
-        # Удаляем все типы subdivision если отключено
-        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]
-        for mod_name in subdiv_modifiers:
+        # Удаляем все типы multiresolution если отключено
+        multires_modifiers = ["MLD_Multires", "MLD_MultiresGN", SUBDIV_MOD_NAME]  # MLD_Multires в приоритете
+        for mod_name in multires_modifiers:
             old_md = obj.modifiers.get(mod_name)
             if old_md:
                 try:
                     obj.modifiers.remove(old_md)
-                    print(f"[MLD] Removed subdivision modifier: {mod_name}")
+                    print(f"[MLD] Removed multiresolution modifier: {mod_name}")
                 except Exception as e:
                     print(f"[MLD] Warning: could not remove {mod_name}: {e}")
         
-        remove_subdiv_gn(obj)
-        print(f"[MLD] ○ Subdivision: disabled")
+        remove_multires_gn(obj)
+        print(f"[MLD] ○ Multiresolution: disabled")
     
     return None
 
-def _get_subdivided_mesh_safe(obj: bpy.types.Object, context) -> bpy.types.Mesh:
-    """БЕЗОПАСНОЕ получение subdivided mesh с проверками."""
+def _get_multires_mesh_safe(obj: bpy.types.Object, context) -> bpy.types.Mesh:
+    """БЕЗОПАСНОЕ получение multiresolution mesh с проверками."""
     try:
-        print(f"[MLD] Getting subdivided mesh safely...")
+        print(f"[MLD] Getting multiresolution mesh safely...")
         
-        # Проверяем все возможные subdivision модификаторы
-        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]
-        subdiv_md = None
+        # Проверяем все возможные multiresolution модификаторы
+        multires_modifiers = ["MLD_Multires", "MLD_MultiresGN", SUBDIV_MOD_NAME]  # MLD_Multires в приоритете
+        multires_md = None
         
-        for mod_name in subdiv_modifiers:
-            subdiv_md = obj.modifiers.get(mod_name)
-            if subdiv_md:
-                print(f"[MLD] Found subdivision modifier: {mod_name}")
+        for mod_name in multires_modifiers:
+            multires_md = obj.modifiers.get(mod_name)
+            if multires_md:
+                print(f"[MLD] Found multiresolution modifier: {mod_name}")
                 break
         
-        if not subdiv_md:
-            print(f"[MLD] No subdivision modifier found")
+        if not multires_md:
+            print(f"[MLD] No multiresolution modifier found")
             return None
         
-        if not subdiv_md.show_viewport:
-            print(f"[MLD] Subdivision modifier is disabled")
+        if not multires_md.show_viewport:
+            print(f"[MLD] Multiresolution modifier is disabled")
             return None
         
         # БЕЗОПАСНОЕ временное отключение других модификаторов
         modifiers_states = []
         for mod in obj.modifiers:
             modifiers_states.append((mod.name, mod.show_viewport))
-            # Отключаем все модификаторы кроме найденного subdivision
-            if mod.name != subdiv_md.name:
+            # Отключаем все модификаторы кроме найденного multiresolution
+            if mod.name != multires_md.name:
                 mod.show_viewport = False
         
         # ПРИНУДИТЕЛЬНОЕ обновление dependency graph
@@ -151,7 +158,7 @@ def _get_subdivided_mesh_safe(obj: bpy.types.Object, context) -> bpy.types.Mesh:
             print(f"[MLD] Warning: context update failed: {e}")
         
         # Получаем evaluated mesh с таймаутом защитой (conceptual)
-        print(f"[MLD] Evaluating subdivided mesh...")
+        print(f"[MLD] Evaluating multiresolution mesh...")
         depsgraph = context.evaluated_depsgraph_get()
         obj_eval = obj.evaluated_get(depsgraph)
         
@@ -159,18 +166,18 @@ def _get_subdivided_mesh_safe(obj: bpy.types.Object, context) -> bpy.types.Mesh:
         if not obj_eval or not obj_eval.data:
             raise Exception("Failed to get evaluated object")
         
-        mesh_subdivided = obj_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        mesh_multires = obj_eval.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
         
         # ПРОВЕРКА результирующего mesh
-        if not mesh_subdivided:
+        if not mesh_multires:
             raise Exception("to_mesh() returned None")
         
         # Проверка разумности результата
-        new_vert_count = len(mesh_subdivided.vertices)
+        new_vert_count = len(mesh_multires.vertices)
         original_vert_count = len(obj.data.vertices)
         
         if new_vert_count > original_vert_count * 100:  # Более чем в 100 раз
-            print(f"[MLD] WARNING: Subdivided mesh is extremely large: {new_vert_count} vertices")
+            print(f"[MLD] WARNING: Multiresolution mesh is extremely large: {new_vert_count} vertices")
             print(f"[MLD] Original had {original_vert_count} vertices")
         
         # Восстанавливаем состояния модификаторов
@@ -179,11 +186,11 @@ def _get_subdivided_mesh_safe(obj: bpy.types.Object, context) -> bpy.types.Mesh:
             if mod:
                 mod.show_viewport = show_state
         
-        print(f"[MLD] ✓ Got subdivided mesh: {new_vert_count} verts (from {original_vert_count} original)")
-        return mesh_subdivided
+        print(f"[MLD] ✓ Got multiresolution mesh: {new_vert_count} verts (from {original_vert_count} original)")
+        return mesh_multires
         
     except Exception as e:
-        print(f"[MLD] ✗ Failed to get subdivided mesh: {e}")
+        print(f"[MLD] ✗ Failed to get multiresolution mesh: {e}")
         import traceback
         traceback.print_exc()
         
@@ -198,11 +205,11 @@ def _get_subdivided_mesh_safe(obj: bpy.types.Object, context) -> bpy.types.Mesh:
         
         return None
 
-def _write_displacement_to_carrier(obj: bpy.types.Object, carrier, subdivided_mesh, per_vert_displacement):
+def _write_displacement_to_carrier(obj: bpy.types.Object, carrier, multires_mesh, per_vert_displacement):
     """Write displacement data directly to carrier mesh attributes."""
     try:
-        # Обновим carrier mesh с subdivided топологией
-        sync_carrier_mesh(carrier, subdivided_mesh)
+        # Обновим carrier mesh с multiresolution топологией
+        sync_carrier_mesh(carrier, multires_mesh)
         
         # Убедимся что у carrier есть OFFS атрибут
         carrier_mesh = carrier.data
@@ -298,6 +305,14 @@ class MLD_OT_recalculate(bpy.types.Operator):
             self.report({'ERROR'}, "No MLD settings found.")
             return {'CANCELLED'}
 
+        # ДИАГНОСТИКА настроек
+        print(f"[MLD] === SETTINGS DEBUG ===")
+        print(f"[MLD] Settings object: {s}")
+        print(f"[MLD] Settings type: {type(s)}")
+        print(f"[MLD] subdiv_enable: {getattr(s, 'subdiv_enable', 'NOT_FOUND')}")
+        print(f"[MLD] subdiv_view: {getattr(s, 'subdiv_view', 'NOT_FOUND')}")
+        print(f"[MLD] ======================")
+
         if len(s.layers) == 0:
             self.report({'WARNING'}, "No layers to process.")
             return {'CANCELLED'}
@@ -310,7 +325,7 @@ class MLD_OT_recalculate(bpy.types.Operator):
         
         # ПРЕДУПРЕЖДЕНИЕ о сложности
         if vert_count > 100000:
-            self.report({'WARNING'}, f"High poly mesh ({vert_count:,} vertices). Consider lower subdivision levels.")
+            self.report({'WARNING'}, f"High poly mesh ({vert_count:,} vertices). Consider lower multiresolution levels.")
         
         # Ensure Object mode
         try:
@@ -319,21 +334,21 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception:
             pass
 
-        print("[MLD] === SAFE SUBDIVISION GN RECALCULATE START ===")
+        print("[MLD] === SAFE MULTIRESOLUTION GN RECALCULATE START ===")
         
-        # STEP 1: Setup subdivision modifier (БЕЗОПАСНАЯ ВЕРСИЯ)
-        subdiv_md = None
+        # STEP 1: Setup multiresolution modifier (БЕЗОПАСНАЯ ВЕРСИЯ)
+        multires_md = None
         try:
-            subdiv_md = _ensure_subdiv_new(obj, s)
-            if subdiv_md:
-                print(f"[MLD] ✓ Subdivision GN ready: {getattr(s, 'subdiv_view', 1)} levels")
+            multires_md = _ensure_multires_new(obj, s)
+            if multires_md:
+                print(f"[MLD] ✓ Multiresolution GN ready: {getattr(s, 'subdiv_view', 1)} levels")
             else:
-                print("[MLD] ○ Subdivision: disabled or failed")
+                print("[MLD] ○ Multiresolution: disabled or failed")
         except Exception as e:
-            print(f"[MLD] ✗ Subdiv GN setup failed: {e}")
+            print(f"[MLD] ✗ Multires GN setup failed: {e}")
             import traceback
             traceback.print_exc()
-            # НЕ возвращаем CANCELLED - продолжаем без subdivision
+            # НЕ возвращаем CANCELLED - продолжаем без multiresolution
 
         # STEP 2: Force depsgraph update с retry
         for attempt in range(3):
@@ -346,18 +361,18 @@ class MLD_OT_recalculate(bpy.types.Operator):
                 if attempt == 2:  # Последняя попытка
                     print(f"[MLD] Continuing without successful depsgraph update")
 
-        # STEP 3: Get subdivided mesh (БЕЗОПАСНО)
-        subdivided_mesh = None
-        if subdiv_md:
-            subdivided_mesh = _get_subdivided_mesh_safe(obj, context)
-            if not subdivided_mesh:
-                print(f"[MLD] ⚠ Failed to get subdivided mesh, using original")
+        # STEP 3: Get multiresolution mesh (БЕЗОПАСНО)
+        multires_mesh = None
+        if multires_md:
+            multires_mesh = _get_multires_mesh_safe(obj, context)
+            if not multires_mesh:
+                print(f"[MLD] ⚠ Failed to get multiresolution mesh, using original")
         
-        # Use subdivided or original mesh for heightfill
-        work_mesh = subdivided_mesh if subdivided_mesh else obj.data
+        # Use multiresolution or original mesh for heightfill
+        work_mesh = multires_mesh if multires_mesh else obj.data
         print(f"[MLD] Using work mesh: {len(work_mesh.vertices)} vertices")
 
-        # STEP 4: Create carrier for subdivided topology
+        # STEP 4: Create carrier for multiresolution topology
         try:
             carrier = ensure_carrier(obj)
             print(f"[MLD] ✓ Carrier created: {carrier.name}")
@@ -447,10 +462,10 @@ class MLD_OT_recalculate(bpy.types.Operator):
             print(f"[MLD] ✗ Preview build failed: {e}")
 
         # STEP 11: Cleanup (БЕЗОПАСНО)
-        if subdivided_mesh:
+        if multires_mesh:
             try:
-                bpy.data.meshes.remove(subdivided_mesh, do_unlink=True)
-                print("[MLD] ✓ Cleaned up subdivided mesh")
+                bpy.data.meshes.remove(multires_mesh, do_unlink=True)
+                print("[MLD] ✓ Cleaned up multiresolution mesh")
             except Exception as e:
                 print(f"[MLD] Warning: cleanup failed: {e}")
 
@@ -497,8 +512,8 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception as e:
             print(f"[MLD] Warning: viewport update failed: {e}")
 
-        print("[MLD] === SAFE SUBDIVISION GN RECALCULATE COMPLETE ===")
-        self.report({'INFO'}, "Displacement calculated using Subdivision GN (SAFE MODE).")
+        print("[MLD] === SAFE MULTIRESOLUTION GN RECALCULATE COMPLETE ===")
+        self.report({'INFO'}, "Displacement calculated using Multiresolution GN (SAFE MODE).")
         return {'FINISHED'}
 
 def solve_heightfill_for_carrier(obj: bpy.types.Object, s, context, work_mesh: bpy.types.Mesh):

@@ -11,7 +11,7 @@ bl_info = {
 import bpy, importlib, traceback
 
 _SUBMODULES = [
-    ".constants",".utils",".attrs",".sampling",".materials",".heightfill",".gn",".gn_subdiv",
+    ".constants",".utils",".attrs",".sampling",".materials",".heightfill",".gn",".gn_subdiv",".gn_multires",
     ".settings",".ops_layers",".ops_masks",".ops_materials",".ops_assign_from_disp",
     ".ops_pipeline",".ops_reset_all",".ops_reset",".ops_bake",".ops_pack",
     ".ops_settings_io",".ops_vc_channels",".ui",

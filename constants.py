@@ -2,7 +2,8 @@
 
 # Modifier names
 GN_MOD_NAME = "MLD_DisplaceGN"
-SUBDIV_GN_MOD_NAME = "MLD_SubdivGN"  # НОВАЯ КОНСТАНТА
+SUBDIV_GN_MOD_NAME = "MLD_SubdivGN"  # Оставляем для совместимости
+MULTIRES_GN_MOD_NAME = "MLD_MultiresGN"  # НОВАЯ КОНСТАНТА для multiresolution
 SUBDIV_MOD_NAME = "MLD_RefineSubdiv"  # Оставляем для совместимости
 DECIMATE_MOD_NAME = "MLD_Decimate"
 

@@ -1,6 +1,7 @@
 import bpy
 from bpy.types import Operator
 from .constants import GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
+from .gn_multires import remove_multires_gn
 
 class MLD_OT_reset_displacement(Operator):
     bl_idname = "mld.reset_displacement"
@@ -12,7 +13,10 @@ class MLD_OT_reset_displacement(Operator):
         if not obj or obj.type != 'MESH':
             return {'CANCELLED'}
         
-        # Remove modifiers (добавлен SUBDIV_GN_MOD_NAME)
+        # Remove multiresolution modifier specifically
+        remove_multires_gn(obj)
+        
+        # Remove other modifiers
         for name in (SUBDIV_GN_MOD_NAME, "MLD_Subdiv", GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:

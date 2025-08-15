@@ -1,7 +1,8 @@
-# ops_reset_all.py — ОБНОВЛЕННАЯ ВЕРСИЯ с subdivision GN
+# ops_reset_all.py — ОБНОВЛЕННАЯ ВЕРСИЯ с multiresolution
 import bpy
 from bpy.types import Operator
 from .utils import active_obj
+from .gn_multires import remove_multires_gn
 from .constants import (
     GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME,
     # Default values
@@ -89,7 +90,10 @@ class MLD_OT_reset_all(Operator):
             except Exception:
                 pass
 
-        # Remove modifiers (обновлено для subdivision GN)
+        # Remove multiresolution modifier specifically
+        remove_multires_gn(obj)
+        
+        # Remove other modifiers
         for name in (SUBDIV_GN_MOD_NAME, GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:

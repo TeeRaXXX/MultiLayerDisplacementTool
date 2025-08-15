@@ -61,13 +61,13 @@ def _get_detailed_polycount_info(obj: bpy.types.Object, s) -> list:
         current_tris = orig_t
         pipeline_info = []
         
-        # After subdivision (if enabled)
+        # After multiresolution (if enabled)
         if getattr(s, "subdiv_enable", False):
-            subdiv_levels = getattr(s, "subdiv_view", 1)
-            if subdiv_levels > 0:
-                subdiv_tris = orig_t * (4 ** subdiv_levels)
-                current_tris = subdiv_tris
-                pipeline_info.append(f"Subdiv: {subdiv_tris:,}")
+            multires_levels = getattr(s, "subdiv_view", 1)
+            if multires_levels > 0:
+                multires_tris = orig_t * (4 ** multires_levels)
+                current_tris = multires_tris
+                pipeline_info.append(f"Multires: {multires_tris:,}")
         
         # After displacement (if we have displacement data)
         try:
@@ -378,13 +378,13 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         except Exception:
             lab = col.row(align=True); lab.enabled = False; lab.label(text="Reset ops missing")
 
-        # 8) Subdivision refine (ОБНОВЛЕННАЯ СЕКЦИЯ С GEOMETRY NODES)
+        # 8) Multiresolution refine (ОБНОВЛЕННАЯ СЕКЦИЯ С GEOMETRY NODES)
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         
         # Header with info
         header = col.row(align=True)
-        header.label(text="Refine (Subdivision GN)", icon='GEOMETRY_NODES')  # ОБНОВЛЕНА ИКОНКА
+        header.label(text="Refine (Multiresolution GN)", icon='GEOMETRY_NODES')  # ОБНОВЛЕНА ИКОНКА
         info_button = header.row()
         info_button.scale_x = 0.5
         info_button.label(text="📝", icon='NONE')  # Indicates changes applied on Recalculate
@@ -394,10 +394,9 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             row = col.row(align=True)
             row.prop(s, "subdiv_type", text="")
             row = col.row(align=True)
-            row.prop(s, "subdiv_view", text="Viewport")
-            row.prop(s, "subdiv_render", text="Render")
+            row.prop(s, "subdiv_view", text="Subdivide Levels")
             
-            # НОВЫЕ параметры subdivision GN
+            # НОВЫЕ параметры multiresolution GN
             col.separator()
             col.prop(s, "subdiv_preserve_creases", text="Preserve Creases")
             col.prop(s, "subdiv_smooth_uvs", text="Smooth UVs")
