@@ -56,6 +56,23 @@ DEFAULT_DECIMATE_RATIO = 0.1
 DEFAULT_FILL_EMPTY_VC_WHITE = False
 DEFAULT_VC_ATTRIBUTE_NAME = "Color"
 
+# Texture mask packing settings defaults
+DEFAULT_PACK_TO_TEXTURE_MASK = False
+DEFAULT_TEXTURE_MASK_NAME = "MLD_Mask"
+DEFAULT_TEXTURE_MASK_UV = "UVMap"
+DEFAULT_TEXTURE_MASK_RESOLUTION = '1024'
+
+# Texture resolution options
+TEXTURE_RESOLUTION_OPTIONS = [
+    ('64', "64×64", "64×64 pixels"),
+    ('128', "128×128", "128×128 pixels"),
+    ('256', "256×256", "256×256 pixels"),
+    ('512', "512×512", "512×512 pixels"),
+    ('1024', "1K", "1024×1024 pixels"),
+    ('2048', "2K", "2048×2048 pixels"),
+    ('4096', "4K", "4096×4096 pixels"),
+]
+
 # Polycount tracking defaults
 DEFAULT_LAST_POLY_V = 0
 DEFAULT_LAST_POLY_F = 0

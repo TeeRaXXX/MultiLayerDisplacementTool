@@ -163,7 +163,7 @@ class MLD_OT_apply_packed_vc_shader(Operator):
         # Check if we have layers with VC channel assignments
         has_assignments = False
         for L in s.layers:
-            if getattr(L, "vc_channel", 'NONE') in {'R', 'G', 'B'}:
+            if getattr(L, "vc_channel", 'NONE') in {'R', 'G', 'B', 'A'}:
                 has_assignments = True
                 break
         
@@ -188,8 +188,59 @@ class MLD_OT_apply_packed_vc_shader(Operator):
             return {'CANCELLED'}
 
 
+class MLD_OT_apply_packed_texture_mask_shader(Operator):
+    """Apply shader that works with packed texture mask after mesh bake."""
+    bl_idname = "mld.apply_packed_texture_mask_shader"
+    bl_label = "Apply Packed Texture Mask Shader"
+    bl_description = "Create and apply a shader that reads from packed texture mask"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = active_obj(context)
+        if not obj or obj.type != 'MESH':
+            self.report({'ERROR'}, "Select a mesh object.")
+            return {'CANCELLED'}
+        
+        s = obj.mld_settings
+        
+        # Check if we have packed texture mask
+        texture_name = getattr(s, 'texture_mask_name', 'MLD_Mask')
+        texture = bpy.data.images.get(texture_name)
+        
+        if not texture:
+            self.report({'ERROR'}, f"Packed texture mask '{texture_name}' not found. Run Bake Mesh first.")
+            return {'CANCELLED'}
+        
+        # Check if we have layers with channel assignments
+        has_assignments = False
+        for L in s.layers:
+            if getattr(L, "vc_channel", 'NONE') in {'R', 'G', 'B', 'A'}:
+                has_assignments = True
+                break
+        
+        if not has_assignments:
+            self.report({'ERROR'}, "No layers with channel assignments found.")
+            return {'CANCELLED'}
+        
+        # Import and apply the shader
+        try:
+            from .materials import build_packed_texture_mask_shader
+            mat = build_packed_texture_mask_shader(obj, s)
+            
+            if mat:
+                self.report({'INFO'}, f"Applied packed texture mask shader using '{texture_name}' texture")
+                return {'FINISHED'}
+            else:
+                self.report({'ERROR'}, "Failed to create packed texture mask shader")
+                return {'CANCELLED'}
+                
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to apply packed texture mask shader: {e}")
+            return {'CANCELLED'}
+
+
 # Update register/unregister
-classes = (MLD_OT_assign_materials, MLD_OT_apply_packed_vc_shader)
+classes = (MLD_OT_assign_materials, MLD_OT_apply_packed_vc_shader, MLD_OT_apply_packed_texture_mask_shader)
 
 def register():
     for c in classes:

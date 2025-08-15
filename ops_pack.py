@@ -8,7 +8,7 @@ from .constants import PACK_ATTR
 
 def _any_channel_assigned(s):
     """Check if any layer has a VC channel assigned."""
-    return any(getattr(L, 'vc_channel', 'NONE') in {'R','G','B'} for L in s.layers)
+    return any(getattr(L, 'vc_channel', 'NONE') in {'R','G','B','A'} for L in s.layers)
 
 def _pack_vc_now(obj, s):
     """Pack selected channels per-loop into object's vertex colors with proper error handling."""
@@ -46,7 +46,7 @@ def _pack_vc_now(obj, s):
     nloops = len(me.loops)
     
     # Build per-channel assignments
-    chan_map = {'R': None, 'G': None, 'B': None}
+    chan_map = {'R': None, 'G': None, 'B': None, 'A': None}
     for i, L in enumerate(s.layers):
         ch = getattr(L, 'vc_channel', 'NONE')
         if ch in chan_map and chan_map[ch] is None:
@@ -61,7 +61,8 @@ def _pack_vc_now(obj, s):
     per_loop = {
         'R': [default_fill] * nloops, 
         'G': [default_fill] * nloops, 
-        'B': [default_fill] * nloops
+        'B': [default_fill] * nloops,
+        'A': [default_fill] * nloops
     }
 
     # Fill assigned channels from mask data
@@ -94,7 +95,8 @@ def _pack_vc_now(obj, s):
             r = per_loop['R'][li]
             g = per_loop['G'][li] 
             b = per_loop['B'][li]
-            vc_layer.data[li].color = (r, g, b, 1.0)  # Alpha always 1.0
+            a = per_loop['A'][li]
+            vc_layer.data[li].color = (r, g, b, a)
         
         me.update()
         print(f"[MLD] Successfully packed to vertex color layer: {vc_layer.name}")

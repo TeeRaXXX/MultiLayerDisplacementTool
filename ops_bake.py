@@ -6,7 +6,7 @@ from .attrs import ensure_color_attr, color_attr_exists, loop_red
 from .constants import PACK_ATTR, ALPHA_PREFIX, GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
 
 def _any_channel_assigned(s):
-    return any(L.vc_channel in {'R','G','B'} for L in s.layers)
+    return any(L.vc_channel in {'R','G','B','A'} for L in s.layers)
 
 def _pack_vc_now(obj, s):
     """Pack selected channels per-loop into object's vertex colors with proper error handling."""
@@ -58,7 +58,7 @@ def _pack_vc_now(obj, s):
     nloops = len(me.loops)
     
     # Build per-channel assignments
-    chan_map = {'R': None, 'G': None, 'B': None}
+    chan_map = {'R': None, 'G': None, 'B': None, 'A': None}
     for i, L in enumerate(s.layers):
         ch = getattr(L, 'vc_channel', 'NONE')
         if ch in chan_map and chan_map[ch] is None:
@@ -73,7 +73,8 @@ def _pack_vc_now(obj, s):
     per_loop = {
         'R': [default_fill] * nloops, 
         'G': [default_fill] * nloops, 
-        'B': [default_fill] * nloops
+        'B': [default_fill] * nloops,
+        'A': [default_fill] * nloops
     }
 
     # Fill assigned channels from mask data
@@ -110,7 +111,8 @@ def _pack_vc_now(obj, s):
                 r = per_loop['R'][li]
                 g = per_loop['G'][li] 
                 b = per_loop['B'][li]
-                vc_layer.data[li].color = (r, g, b, 1.0)  # Alpha always 1.0
+                a = per_loop['A'][li]
+                vc_layer.data[li].color = (r, g, b, a)
         else:
             # Fallback если нет .data
             print(f"[MLD] Warning: vc_layer has no .data attribute")
@@ -124,6 +126,175 @@ def _pack_vc_now(obj, s):
         print(f"[MLD] Pack VC failed: {e}")
         import traceback
         traceback.print_exc()
+        return False, None
+
+def _pack_texture_mask_now(obj, s):
+    """Pack selected channels into texture mask with proper error handling."""
+    me = obj.data
+    
+    print(f"[MLD] Starting pack texture mask for object: {obj.name}")
+    
+    # Get UV layer
+    uv_name = getattr(s, 'texture_mask_uv', 'UVMap')
+    uv_layer = None
+    
+    if hasattr(me, "uv_layers"):
+        for uv in me.uv_layers:
+            if uv.name == uv_name:
+                uv_layer = uv
+                break
+    
+    if not uv_layer:
+        print(f"[MLD] UV layer '{uv_name}' not found")
+        return False, None
+    
+    # Get texture name
+    texture_name = getattr(s, 'texture_mask_name', 'MLD_Mask')
+    
+    # Check if the texture name conflicts with any MLD mask attributes
+    for L in s.layers:
+        mask_name = getattr(L, 'mask_name', '')
+        if mask_name and mask_name == texture_name:
+            print(f"[MLD] Warning: Texture name '{texture_name}' conflicts with layer mask '{mask_name}'")
+            return False, None
+    
+    # Build per-channel assignments
+    chan_map = {'R': None, 'G': None, 'B': None, 'A': None}
+    for i, L in enumerate(s.layers):
+        ch = getattr(L, 'vc_channel', 'NONE')
+        if ch in chan_map and chan_map[ch] is None:
+            chan_map[ch] = i
+    
+    print(f"[MLD] Channel assignments: {chan_map}")
+    
+    # Create texture
+    texture = bpy.data.images.get(texture_name)
+    if not texture:
+        # Get resolution from settings
+        resolution = int(getattr(s, 'texture_mask_resolution', '1024'))
+        # Create new texture with specified resolution
+        texture = bpy.data.images.new(texture_name, resolution, resolution)
+        print(f"[MLD] Created new texture: {texture.name} ({resolution}×{resolution})")
+    else:
+        print(f"[MLD] Using existing texture: {texture.name}")
+    
+    # Get texture dimensions
+    width, height = texture.size
+    
+    # Create pixel array
+    pixels = [0.0] * (width * height * 4)  # RGBA
+    
+    # Default fill value
+    default_fill = 1.0 if getattr(s, 'fill_empty_vc_white', False) else 0.0
+    
+    # Fill with default values
+    for i in range(width * height):
+        pixel_idx = i * 4
+        pixels[pixel_idx] = default_fill     # R
+        pixels[pixel_idx + 1] = default_fill # G
+        pixels[pixel_idx + 2] = default_fill # B
+        pixels[pixel_idx + 3] = 1.0         # A
+    
+    # Fill assigned channels from mask data
+    for ch, layer_idx in chan_map.items():
+        if layer_idx is None:
+            continue
+            
+        L = s.layers[layer_idx]
+        mask_name = getattr(L, 'mask_name', '')
+        
+        print(f"[MLD] Processing layer {layer_idx} channel {ch} with mask: {mask_name}")
+        
+        if not mask_name or not color_attr_exists(me, mask_name):
+            print(f"[MLD] Warning: Layer {layer_idx} channel {ch} has no mask: {mask_name}")
+            continue
+        
+        # Read mask data and map to texture coordinates
+        for poly in me.polygons:
+            for loop_idx in poly.loop_indices:
+                loop = me.loops[loop_idx]
+                
+                # Get UV coordinates
+                if loop_idx < len(uv_layer.data):
+                    uv_coords = uv_layer.data[loop_idx].uv
+                    u, v = uv_coords.x, uv_coords.y
+                    
+                    # Convert to pixel coordinates
+                    px = int(u * width) % width
+                    py = int(v * height) % height
+                    
+                    # Get mask value
+                    try:
+                        mask_value = loop_red(me, mask_name, loop_idx)
+                        if mask_value is not None:
+                            # Set pixel value based on channel
+                            pixel_idx = (py * width + px) * 4
+                            if ch == 'R':
+                                pixels[pixel_idx] = float(mask_value)
+                            elif ch == 'G':
+                                pixels[pixel_idx + 1] = float(mask_value)
+                            elif ch == 'B':
+                                pixels[pixel_idx + 2] = float(mask_value)
+                            elif ch == 'A':
+                                pixels[pixel_idx + 3] = float(mask_value)
+                    except Exception:
+                        pass
+    
+    # Fill gaps by interpolating between assigned pixels
+    # This helps eliminate black gaps between pixels
+    for y in range(height):
+        for x in range(width):
+            pixel_idx = (y * width + x) * 4
+            
+            # Check if this pixel has any non-default values (indicating it was filled with data)
+            has_data = False
+            for i in range(4):
+                if pixels[pixel_idx + i] != default_fill:
+                    has_data = True
+                    break
+            
+            # If this pixel has no data, try to interpolate from nearby pixels
+            if not has_data:
+                # Look for nearby pixels with data and interpolate
+                nearby_values = {'R': [], 'G': [], 'B': [], 'A': []}
+                
+                # Check in a 5x5 area around this pixel for better coverage
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3):
+                        nx, ny = x + dx, y + dy
+                        if 0 <= nx < width and 0 <= ny < height:
+                            nearby_idx = (ny * width + nx) * 4
+                            
+                            # Check if this nearby pixel has any data
+                            nearby_has_data = False
+                            for i in range(4):
+                                if pixels[nearby_idx + i] != default_fill:
+                                    nearby_has_data = True
+                                    break
+                            
+                            if nearby_has_data:
+                                # Check each channel
+                                for i, ch in enumerate(['R', 'G', 'B', 'A']):
+                                    val = pixels[nearby_idx + i]
+                                    if val != default_fill:
+                                        nearby_values[ch].append(val)
+                
+                # Interpolate each channel
+                for i, ch in enumerate(['R', 'G', 'B', 'A']):
+                    if nearby_values[ch]:
+                        # Use average of nearby values
+                        avg_val = sum(nearby_values[ch]) / len(nearby_values[ch])
+                        pixels[pixel_idx + i] = avg_val
+    
+    # Write pixels to texture
+    try:
+        texture.pixels = pixels
+        texture.update()
+        print(f"[MLD] Successfully packed to texture: {texture.name}")
+        return True, texture.name
+        
+    except Exception as e:
+        print(f"[MLD] Pack texture failed: {e}")
         return False, None
 
 def _cleanup_after_bake(obj, preserve_vc_name=None):
@@ -254,6 +425,11 @@ class MLD_OT_bake_mesh(Operator):
             self.report({'ERROR'}, "Pack to Vertex Colors is enabled but no VC channels are assigned. Please assign channels in layer settings first.")
             return {'CANCELLED'}
 
+        # Check if pack texture mask is enabled but no channels are assigned
+        if getattr(s, "pack_to_texture_mask", False) and not _any_channel_assigned(s):
+            self.report({'ERROR'}, "Pack to Texture Mask is enabled but no channels are assigned. Please assign channels in layer settings first.")
+            return {'CANCELLED'}
+
         # STEP 1: Create preview material FIRST (before any modifications) - ONLY if pack to VC is enabled
         preview_material_created = False
         if getattr(s, "bake_pack_vc", False) and getattr(s, "preview_enable", False):
@@ -320,9 +496,33 @@ class MLD_OT_bake_mesh(Operator):
                     s.vc_packed = True
                     s.vc_attribute_name = bake_vc_name  # Keep the bake name for the shader
 
+        # STEP 3: Pack texture mask if enabled and any channel assigned (before removing attributes)
+        texture_mask_packed = False
+        packed_texture_mask_name = None
+        if getattr(s, "pack_to_texture_mask", False) and _any_channel_assigned(s):
+            # Check for attribute name conflicts
+            bake_texture_mask_name = getattr(s, "texture_mask_name", "MLD_Mask")
+            conflict_found = False
+            
+            # Check if the bake texture mask name conflicts with any existing MLD mask attributes
+            for L in s.layers:
+                mask_name = getattr(L, 'mask_name', '')
+                if mask_name and mask_name == bake_texture_mask_name:
+                    conflict_found = True
+                    self.report({'ERROR'}, f"Texture mask name '{bake_texture_mask_name}' conflicts with layer mask '{mask_name}'. Please use a different name.")
+                    return {'CANCELLED'}
+            
+            if not conflict_found:
+                success, texture_mask_name = _pack_texture_mask_now(obj, s)
+                
+                if success:
+                    texture_mask_packed = True
+                    packed_texture_mask_name = texture_mask_name
+                    s.texture_mask_packed = True
+
         prev = safe_mode(obj, 'OBJECT')
 
-        # STEP 3: Apply modifiers in order: Subdiv -> GN -> Decimate
+        # STEP 4: Apply modifiers in order: Subdiv -> GN -> Decimate
         # Handle both new Geometry Nodes subdivision and fallback subdivision
         subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]  # Try all possible names
         for subdiv_name in subdiv_modifiers:
@@ -353,7 +553,7 @@ class MLD_OT_bake_mesh(Operator):
             else:
                 print(f"[MLD] Warning: Preview material may have been lost after modifiers")
 
-        # STEP 4: Remove carrier object
+        # STEP 5: Remove carrier object
         cname=f"MLD_Carrier::{obj.name}"
         carr=bpy.data.objects.get(cname)
         if carr:
@@ -364,7 +564,7 @@ class MLD_OT_bake_mesh(Operator):
                     bpy.data.meshes.remove(me, do_unlink=True)
             except Exception: pass
 
-        # STEP 5: Apply packed VC shader if VC was packed (overrides preview material)
+        # STEP 6: Apply packed VC shader if VC was packed (overrides preview material)
         if vc_packed:
             try:
                 from .materials import build_packed_vc_preview_shader
@@ -394,7 +594,37 @@ class MLD_OT_bake_mesh(Operator):
                 import traceback
                 traceback.print_exc()
 
-        # STEP 6: Cleanup attributes AFTER materials are created
+        # STEP 7: Apply packed texture mask shader if texture mask was packed (overrides preview material)
+        if texture_mask_packed:
+            try:
+                from .materials import build_packed_texture_mask_shader
+                mat = build_packed_texture_mask_shader(obj, s)
+                if mat:
+                    print(f"[MLD] Applied packed texture mask shader after bake: {mat.name}")
+                    
+                    # Ensure material is assigned to object (overrides preview material)
+                    if len(obj.data.materials) == 0:
+                        obj.data.materials.append(mat)
+                    else:
+                        obj.data.materials[0] = mat
+                    
+                    # Ensure all polygons use this material
+                    for poly in obj.data.polygons:
+                        poly.material_index = 0
+                    
+                    obj.data.update()
+                    print(f"[MLD] Packed texture mask material '{mat.name}' assigned to all {len(obj.data.polygons)} polygons")
+                    
+                    # Update preview_material_created flag since we now have a different material
+                    preview_material_created = False
+                else:
+                    print(f"[MLD] Failed to create packed texture mask shader")
+            except Exception as e:
+                print(f"[MLD] Failed to apply packed texture mask shader: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # STEP 8: Cleanup attributes AFTER materials are created
         _cleanup_after_bake(obj, preserve_vc_name=packed_vc_name if vc_packed else None)
         
         # Verify that material is still working after cleanup
@@ -402,7 +632,7 @@ class MLD_OT_bake_mesh(Operator):
             mat = obj.data.materials[0]
             if mat:
                 print(f"[MLD] Final material after cleanup: '{mat.name}'")
-                if mat.name.startswith("MLD_Preview::") or mat.name.startswith("MLD_PackedVC::"):
+                if mat.name.startswith("MLD_Preview::") or mat.name.startswith("MLD_PackedVC::") or mat.name.startswith("MLD_TextureMask::"):
                     print(f"[MLD] ✓ Material should work correctly after attribute cleanup")
                 else:
                     print(f"[MLD] ⚠ Material may not be MLD preview material")
@@ -442,6 +672,8 @@ class MLD_OT_bake_mesh(Operator):
         # Report success with details
         if vc_packed and packed_vc_name:
             self.report({'INFO'}, f"Baked mesh with vertex colors packed to '{packed_vc_name}' and shader applied.")
+        elif texture_mask_packed and packed_texture_mask_name:
+            self.report({'INFO'}, f"Baked mesh with texture mask packed to '{packed_texture_mask_name}' and shader applied.")
         elif preview_material_created:
             self.report({'INFO'}, "Baked mesh with preview material created.")
         else:

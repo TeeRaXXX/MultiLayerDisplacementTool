@@ -483,7 +483,7 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             assigned_channels = []
             for L in s.layers:
                 ch = getattr(L, "vc_channel", 'NONE')
-                if ch in ['R', 'G', 'B']:
+                if ch in ['R', 'G', 'B', 'A']:
                     assigned_channels.append(ch)
             
             if assigned_channels:
@@ -507,29 +507,78 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             if conflict_found:
                 col.label(text=f"⚠ Name conflicts with layer mask", icon='ERROR')
         
-        # Bake button - 2x height
-        bake_row = col.row()
-        bake_row.scale_y = 2.0
-        if getattr(s, "bake_pack_vc", False):
-            # Check if channels are assigned when pack VC is enabled
-            assigned_channels = []
+        # Pack to Texture Mask section
+        col.prop(s, "pack_to_texture_mask", text="Pack to Texture Mask")
+        
+        if getattr(s, "pack_to_texture_mask", False):
+            # Show which channels are assigned for texture
+            assigned_texture_channels = []
             for L in s.layers:
                 ch = getattr(L, "vc_channel", 'NONE')
-                if ch in ['R', 'G', 'B']:
-                    assigned_channels.append(ch)
+                if ch in ['R', 'G', 'B', 'A']:
+                    assigned_texture_channels.append(ch)
+            
+            if assigned_texture_channels:
+                info_text = f"Assigned: {', '.join(sorted(assigned_texture_channels))}"
+                col.label(text=info_text, icon='INFO')
+            else:
+                col.label(text="No channels assigned", icon='ERROR')
+            
+            col.prop(s, "texture_mask_name", text="Texture Name")
+            col.prop(s, "texture_mask_uv", text="UV Layer")
+            col.prop(s, "texture_mask_resolution", text="Resolution")
             
             # Check for name conflicts
-            bake_vc_name = getattr(s, "bake_vc_attribute_name", "Color")
+            texture_name = getattr(s, "texture_mask_name", "MLD_Mask")
             conflict_found = False
             for L in s.layers:
                 mask_name = getattr(L, 'mask_name', '')
-                if mask_name and mask_name == bake_vc_name:
+                if mask_name and mask_name == texture_name:
                     conflict_found = True
                     break
+            
+            if conflict_found:
+                col.label(text=f"⚠ Name conflicts with layer mask", icon='ERROR')
+        
+        # Bake button - 2x height
+        bake_row = col.row()
+        bake_row.scale_y = 2.0
+        
+        # Check if any pack option is enabled and has assignments
+        pack_vc_enabled = getattr(s, "bake_pack_vc", False)
+        pack_texture_enabled = getattr(s, "pack_to_texture_mask", False)
+        
+        if pack_vc_enabled or pack_texture_enabled:
+            # Check if channels are assigned when any pack option is enabled
+            assigned_channels = []
+            for L in s.layers:
+                ch = getattr(L, "vc_channel", 'NONE')
+                if ch in ['R', 'G', 'B', 'A']:
+                    assigned_channels.append(ch)
+            
+            # Check for name conflicts
+            conflict_found = False
+            
+            if pack_vc_enabled:
+                bake_vc_name = getattr(s, "bake_vc_attribute_name", "Color")
+                for L in s.layers:
+                    mask_name = getattr(L, 'mask_name', '')
+                    if mask_name and mask_name == bake_vc_name:
+                        conflict_found = True
+                        break
+            
+            if pack_texture_enabled and not conflict_found:
+                texture_name = getattr(s, "texture_mask_name", "MLD_Mask")
+                for L in s.layers:
+                    mask_name = getattr(L, 'mask_name', '')
+                    if mask_name and mask_name == texture_name:
+                        conflict_found = True
+                        break
             
             bake_row.enabled = len(assigned_channels) > 0 and not conflict_found
         else:
             bake_row.enabled = True
+            
         _op(bake_row, "mld.bake_mesh", text="Bake Mesh", icon='CHECKMARK')
 
         # 12) Post-bake tools (показывать только если есть packed VC)
@@ -544,6 +593,19 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             
             # Apply shader button
             _op(col, "mld.apply_packed_vc_shader", text="Apply VC Shader", icon='MATERIAL')
+
+        # 13) Post-bake tools for texture mask (показывать только если есть packed texture mask)
+        if getattr(s, "texture_mask_packed", False):
+            box = layout.box()
+            col = box.column(align=True)
+            col.label(text="Post-Bake Tools (Texture)", icon='TOOL_SETTINGS')
+            
+            # Show current texture mask name
+            texture_name = getattr(s, 'texture_mask_name', 'MLD_Mask')
+            col.label(text=f"Using: '{texture_name}'", icon='IMAGE')
+            
+            # Apply shader button
+            _op(col, "mld.apply_packed_texture_mask_shader", text="Apply Texture Mask Shader", icon='MATERIAL')
 
 # --------------- register -----------------------------------------------------
 

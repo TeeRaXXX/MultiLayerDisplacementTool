@@ -389,7 +389,7 @@ def build_packed_vc_preview_shader(obj: bpy.types.Object, s) -> bpy.types.Materi
             if not L.enabled or not L.material:
                 continue
             vc_channel = getattr(L, "vc_channel", 'NONE')
-            if vc_channel in {'R', 'G', 'B'}:
+            if vc_channel in {'R', 'G', 'B', 'A'}:
                 base_img, h_img = _layer_images(L)
                 layers_data.append({
                     'index': i,
@@ -531,6 +531,9 @@ def build_packed_vc_preview_shader(obj: bpy.types.Object, s) -> bpy.types.Materi
                 mask_output = sep_rgb.outputs["G"]
             elif channel == 'B':
                 mask_output = sep_rgb.outputs["B"]
+            elif channel == 'A':
+                # For alpha channel, we need to use the alpha output from the vertex color attribute
+                mask_output = vc_attr.outputs["Alpha"]
             else:
                 print(f"[MLD] Error: Invalid channel '{channel}'")
                 return None
@@ -634,7 +637,193 @@ def build_packed_vc_preview_shader(obj: bpy.types.Object, s) -> bpy.types.Materi
         return mat
         
     except Exception as e:
-        print(f"[MLD] Error in build_packed_vc_preview_shader: {e}")
+        print(f"[MLD] Failed to build packed VC preview shader: {e}")
         import traceback
         traceback.print_exc()
         return None
+
+def build_packed_texture_mask_shader(obj: bpy.types.Object, s) -> bpy.types.Material:
+    """
+    Create a shader that reads from packed texture mask and blends materials.
+    Uses proper mix nodes for material blending based on texture mask channels.
+    """
+    try:
+        if not obj or obj.type != 'MESH':
+            return None
+            
+        me = obj.data
+        texture_name = getattr(s, 'texture_mask_name', 'MLD_Mask')
+        uv_name = getattr(s, 'texture_mask_uv', 'UVMap')
+        
+        print(f"[MLD] Starting build_packed_texture_mask_shader for object: {obj.name}")
+        print(f"[MLD] Using texture mask: {texture_name}")
+        print(f"[MLD] Using UV layer: {uv_name}")
+        
+        # Get texture
+        texture = bpy.data.images.get(texture_name)
+        if not texture:
+            print(f"[MLD] Error: Texture '{texture_name}' not found")
+            return None
+        
+        # Get layers with channel assignments
+        layers_data = []
+        for i, L in enumerate(s.layers):
+            if not L.enabled or not L.material:
+                continue
+            vc_channel = getattr(L, "vc_channel", 'NONE')
+            if vc_channel in {'R', 'G', 'B', 'A'}:
+                base_img, h_img = _layer_images(L)
+                layers_data.append({
+                    'index': i,
+                    'layer': L,
+                    'channel': vc_channel,
+                    'base_img': base_img,
+                    'height_img': h_img
+                })
+                print(f"[MLD] Added layer {i} with channel {vc_channel}")
+        
+        if not layers_data:
+            print("[MLD] No layers with channel assignments found")
+            return None
+
+        # Create/clear preview material
+        mat_name = f"MLD_TextureMask::{obj.name}"
+        mat = bpy.data.materials.get(mat_name)
+        if not mat:
+            mat = bpy.data.materials.new(mat_name)
+            mat.use_nodes = True
+        
+        nt = mat.node_tree
+        nodes, links = nt.nodes, nt.links
+        nodes.clear()
+
+        # Create output and BSDF
+        out = nodes.new("ShaderNodeOutputMaterial")
+        out.location = (2000, 0)
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.location = (1800, 0)
+        bsdf.inputs["Roughness"].default_value = 0.5
+        links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+        # UV Map node
+        uv = nodes.new("ShaderNodeUVMap")
+        uv.location = (-1000, 0)
+        uv.uv_map = uv_name
+
+        # Texture node for mask
+        tex_mask = nodes.new("ShaderNodeTexImage")
+        tex_mask.location = (-1000, -300)
+        tex_mask.image = texture
+        tex_mask.interpolation = 'Cubic'
+        tex_mask.extension = 'REPEAT'
+
+        # Separate RGB to get individual channels
+        sep_rgb = nodes.new("ShaderNodeSeparateRGB")
+        sep_rgb.location = (-800, -300)
+        links.new(tex_mask.outputs["Color"], sep_rgb.inputs["Image"])
+
+        # Create mapping nodes for each layer
+        x_offset = 0
+        y_offset = 200
+        layer_outputs = []
+        
+        for data in layers_data:
+            L = data['layer']
+            channel = data['channel']
+            base_img = data['base_img']
+            
+            # Create mapping node for tiling
+            mapping = nodes.new("ShaderNodeMapping")
+            mapping.location = (x_offset, y_offset)
+            tiling = getattr(L, "tiling", 1.0)
+            mapping.inputs["Scale"].default_value = (tiling, tiling, 1.0)
+            links.new(uv.outputs["UV"], mapping.inputs["Vector"])
+            
+            # Create texture node or RGB fallback
+            if base_img:
+                tex = nodes.new("ShaderNodeTexImage")
+                tex.location = (x_offset + 200, y_offset)
+                tex.image = base_img
+                tex.interpolation = 'Cubic'
+                tex.extension = 'REPEAT'
+                links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+                color_output = tex.outputs["Color"]
+            else:
+                rgb = nodes.new("ShaderNodeRGB")
+                rgb.location = (x_offset + 200, y_offset)
+                rgb.outputs["Color"].default_value = (0.5, 0.5, 0.5, 1.0)
+                color_output = rgb.outputs["Color"]
+            
+            # Get mask value from appropriate channel
+            if channel == 'R':
+                mask_output = sep_rgb.outputs["R"]
+            elif channel == 'G':
+                mask_output = sep_rgb.outputs["G"]
+            elif channel == 'B':
+                mask_output = sep_rgb.outputs["B"]
+            elif channel == 'A':
+                # For alpha channel, we need to use the alpha output from the texture
+                mask_output = tex_mask.outputs["Alpha"]
+            else:
+                print(f"[MLD] Error: Invalid channel '{channel}'")
+                return None
+            
+            layer_outputs.append({
+                'color': color_output,
+                'mask': mask_output,
+                'layer': L
+            })
+            
+            y_offset -= 300
+
+        # Now blend layers together using Mix RGB nodes
+        if len(layer_outputs) == 1:
+            # Single layer - just connect to BSDF
+            links.new(layer_outputs[0]['color'], bsdf.inputs["Base Color"])
+        else:
+            # Multiple layers - blend them
+            current_mix = None
+            
+            for i, layer_data in enumerate(layer_outputs):
+                if i == 0:
+                    # First layer - start with its color
+                    current_color = layer_data['color']
+                    current_mask = layer_data['mask']
+                else:
+                    # Subsequent layers - mix with previous
+                    mix = nodes.new("ShaderNodeMixRGB")
+                    mix.location = (x_offset + 400 + i * 200, 0)
+                    mix.blend_type = 'MIX'
+                    
+                    # Connect previous result to Color1
+                    if current_mix:
+                        links.new(current_mix.outputs["Color"], mix.inputs["Color1"])
+                    else:
+                        links.new(current_color, mix.inputs["Color1"])
+                    
+                    # Connect current layer color to Color2
+                    links.new(layer_data['color'], mix.inputs["Color2"])
+                    
+                    # Connect current layer mask to Fac
+                    links.new(layer_data['mask'], mix.inputs["Fac"])
+                    
+                    current_mix = mix
+            
+            # Connect final result to BSDF
+            if current_mix:
+                links.new(current_mix.outputs["Color"], bsdf.inputs["Base Color"])
+            else:
+                links.new(current_color, bsdf.inputs["Base Color"])
+
+        print(f"[MLD] Successfully built texture mask shader with {len(layers_data)} layers")
+        return mat
+        
+    except Exception as e:
+        print(f"[MLD] Failed to build texture mask shader: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def ensure_preview_material(obj: bpy.types.Object, s) -> None:
+    """Build the HeightLerp-style preview material for the object."""
+    build_heightlerp_preview_shader(obj, s)

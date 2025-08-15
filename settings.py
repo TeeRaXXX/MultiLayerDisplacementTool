@@ -18,7 +18,9 @@ from .constants import (
     DEFAULT_FILL_EMPTY_VC_WHITE, DEFAULT_VC_ATTRIBUTE_NAME,
     DEFAULT_LAST_POLY_V, DEFAULT_LAST_POLY_F, DEFAULT_LAST_POLY_T,
     DEFAULT_LAYER_ENABLED, DEFAULT_LAYER_NAME, DEFAULT_LAYER_MULTIPLIER, 
-    DEFAULT_LAYER_BIAS, DEFAULT_LAYER_TILING, DEFAULT_LAYER_MASK_NAME, DEFAULT_LAYER_VC_CHANNEL
+    DEFAULT_LAYER_BIAS, DEFAULT_LAYER_TILING, DEFAULT_LAYER_MASK_NAME, DEFAULT_LAYER_VC_CHANNEL,
+    DEFAULT_PACK_TO_TEXTURE_MASK, DEFAULT_TEXTURE_MASK_NAME, DEFAULT_TEXTURE_MASK_UV, DEFAULT_TEXTURE_MASK_RESOLUTION,
+    TEXTURE_RESOLUTION_OPTIONS
 )
 
 # ------------------------------------------------------------------------------
@@ -130,6 +132,7 @@ VC_ENUM = [
     ('R', 'R', "Red"),
     ('G', 'G', "Green"),
     ('B', 'B', "Blue"),
+    ('A', 'A', "Alpha"),
 ]
 
 class MLD_Layer(PropertyGroup):
@@ -251,6 +254,23 @@ def _get_mat_assign_threshold(self):
 
 def _set_mat_assign_threshold(self, v): 
     self["mask_threshold"] = float(v)
+
+def _get_uv_layers_items(self, context):
+    """Get list of available UV layers for the current object."""
+    items = []
+    
+    obj = context.object
+    if obj and obj.type == 'MESH' and obj.data:
+        me = obj.data
+        if hasattr(me, "uv_layers"):
+            for uv in me.uv_layers:
+                items.append((uv.name, uv.name, f"UV layer: {uv.name}"))
+    
+    # If no UV layers found, add default
+    if not items:
+        items.append(("UVMap", "UVMap", "Default UV layer"))
+    
+    return items
 
 # ------------------------------------------------------------------------------
 class MLD_Settings(PropertyGroup):
@@ -383,6 +403,27 @@ class MLD_Settings(PropertyGroup):
         description="Name of the vertex color attribute to pack into during bake (e.g., 'Col', 'Color', 'VertexColor')",
     )
     
+    # Pack to Texture Mask options
+    pack_to_texture_mask: BoolProperty(
+        name="Pack to Texture Mask", default=DEFAULT_PACK_TO_TEXTURE_MASK,
+        description="Pack layer masks to texture mask during bake operation",
+    )
+    texture_mask_name: StringProperty(
+        name="Texture Mask Name", default=DEFAULT_TEXTURE_MASK_NAME,
+        description="Name of the texture to create for mask packing",
+    )
+    texture_mask_uv: EnumProperty(
+        name="UV Layer", 
+        items=_get_uv_layers_items,
+        description="UV layer to use for texture mask baking",
+    )
+    texture_mask_resolution: EnumProperty(
+        name="Texture Mask Resolution",
+        items=TEXTURE_RESOLUTION_OPTIONS,
+        default=DEFAULT_TEXTURE_MASK_RESOLUTION,
+        description="Resolution of the texture mask",
+    )
+    
     # Polycount tracking (for UI display)
     last_poly_v: IntProperty(
         name="Last Vertex Count", default=DEFAULT_LAST_POLY_V,
@@ -401,6 +442,12 @@ class MLD_Settings(PropertyGroup):
     vc_packed: BoolProperty(
         name="VC Packed", default=DEFAULT_VC_PACKED,
         description="Whether vertex colors have been packed",
+    )
+    
+    # For texture_mask_packed state
+    texture_mask_packed: BoolProperty(
+        name="Texture Mask Packed", default=False,
+        description="Whether texture mask has been packed",
     )
 
     # helper to mirror thresholds if needed
