@@ -653,11 +653,25 @@ def build_packed_texture_mask_shader(obj: bpy.types.Object, s) -> bpy.types.Mate
             
         me = obj.data
         texture_name = getattr(s, 'texture_mask_name', 'MLD_Mask')
-        uv_name = getattr(s, 'texture_mask_uv', 'UVMap')
+        uv_name = getattr(s, 'texture_mask_uv', 'UVMap')  # Используем UV из настроек
         
         print(f"[MLD] Starting build_packed_texture_mask_shader for object: {obj.name}")
         print(f"[MLD] Using texture mask: {texture_name}")
         print(f"[MLD] Using UV layer: {uv_name}")
+        
+        # Проверяем что UV слой существует
+        uv_layer_exists = False
+        if hasattr(me, "uv_layers"):
+            for uv in me.uv_layers:
+                if uv.name == uv_name:
+                    uv_layer_exists = True
+                    break
+        
+        if not uv_layer_exists:
+            print(f"[MLD] Error: UV layer '{uv_name}' not found on mesh")
+            available_uvs = [uv.name for uv in me.uv_layers] if hasattr(me, "uv_layers") else []
+            print(f"[MLD] Available UV layers: {available_uvs}")
+            return None
         
         # Get texture
         texture = bpy.data.images.get(texture_name)
@@ -705,17 +719,21 @@ def build_packed_texture_mask_shader(obj: bpy.types.Object, s) -> bpy.types.Mate
         bsdf.inputs["Roughness"].default_value = 0.5
         links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
 
-        # UV Map node
+        # UV Map node - ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ UV СЛОЙ
         uv = nodes.new("ShaderNodeUVMap")
         uv.location = (-1000, 0)
-        uv.uv_map = uv_name
+        uv.uv_map = uv_name  # Это ключевое исправление!
+        print(f"[MLD] Set UV map node to use: {uv_name}")
 
-        # Texture node for mask
+        # Texture node for mask - ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ UV
         tex_mask = nodes.new("ShaderNodeTexImage")
         tex_mask.location = (-1000, -300)
         tex_mask.image = texture
         tex_mask.interpolation = 'Cubic'
         tex_mask.extension = 'REPEAT'
+        # Подключаем правильный UV к текстуре маски
+        links.new(uv.outputs["UV"], tex_mask.inputs["Vector"])
+        print(f"[MLD] Connected UV '{uv_name}' to mask texture")
 
         # Separate RGB to get individual channels
         sep_rgb = nodes.new("ShaderNodeSeparateRGB")
@@ -732,11 +750,12 @@ def build_packed_texture_mask_shader(obj: bpy.types.Object, s) -> bpy.types.Mate
             channel = data['channel']
             base_img = data['base_img']
             
-            # Create mapping node for tiling
+            # Create mapping node for tiling - ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ UV
             mapping = nodes.new("ShaderNodeMapping")
             mapping.location = (x_offset, y_offset)
             tiling = getattr(L, "tiling", 1.0)
             mapping.inputs["Scale"].default_value = (tiling, tiling, 1.0)
+            # Подключаем правильный UV к mapping
             links.new(uv.outputs["UV"], mapping.inputs["Vector"])
             
             # Create texture node or RGB fallback
@@ -778,48 +797,97 @@ def build_packed_texture_mask_shader(obj: bpy.types.Object, s) -> bpy.types.Mate
 
         # Now blend layers together using Mix RGB nodes
         if len(layer_outputs) == 1:
-            # Single layer - just connect to BSDF
-            links.new(layer_outputs[0]['color'], bsdf.inputs["Base Color"])
+            # Single layer - direct connection
+            final_color = layer_outputs[0]['color']
         else:
-            # Multiple layers - blend them
-            current_mix = None
+            # Multiple layers - create blend chain
+            x_pos = 400
+            y_pos = 0
             
-            for i, layer_data in enumerate(layer_outputs):
-                if i == 0:
-                    # First layer - start with its color
-                    current_color = layer_data['color']
-                    current_mask = layer_data['mask']
+            # Start with first layer as base
+            current_color = layer_outputs[0]['color']
+            
+            for i in range(1, len(layer_outputs)):
+                # Create Mix RGB node for blending
+                mix = nodes.new("ShaderNodeMixRGB")
+                mix.location = (x_pos, y_pos)
+                mix.blend_type = 'MIX'
+                mix.use_clamp = True
+                
+                # Apply influence to mask
+                infl, contr = _get_preview_params(s)
+                if infl != 1.0:
+                    mult = nodes.new("ShaderNodeMath")
+                    mult.location = (x_pos - 200, y_pos - 100)
+                    mult.operation = 'MULTIPLY'
+                    mult.inputs[1].default_value = infl
+                    links.new(layer_outputs[i]['mask'], mult.inputs[0])
+                    
+                    # Clamp the result
+                    clamp = nodes.new("ShaderNodeClamp")
+                    clamp.location = (x_pos - 100, y_pos - 100)
+                    links.new(mult.outputs["Value"], clamp.inputs["Value"])
+                    mask_input = clamp.outputs["Result"]
                 else:
-                    # Subsequent layers - mix with previous
-                    mix = nodes.new("ShaderNodeMixRGB")
-                    mix.location = (x_offset + 400 + i * 200, 0)
-                    mix.blend_type = 'MIX'
-                    
-                    # Connect previous result to Color1
-                    if current_mix:
-                        links.new(current_mix.outputs["Color"], mix.inputs["Color1"])
-                    else:
-                        links.new(current_color, mix.inputs["Color1"])
-                    
-                    # Connect current layer color to Color2
-                    links.new(layer_data['color'], mix.inputs["Color2"])
-                    
-                    # Connect current layer mask to Fac
-                    links.new(layer_data['mask'], mix.inputs["Fac"])
-                    
-                    current_mix = mix
+                    mask_input = layer_outputs[i]['mask']
+                
+                # Connect to mix node
+                links.new(mask_input, mix.inputs["Fac"])
+                links.new(current_color, mix.inputs["Color1"])
+                links.new(layer_outputs[i]['color'], mix.inputs["Color2"])
+                
+                current_color = mix.outputs["Color"]
+                x_pos += 300
+                y_pos -= 150
             
-            # Connect final result to BSDF
-            if current_mix:
-                links.new(current_mix.outputs["Color"], bsdf.inputs["Base Color"])
-            else:
-                links.new(current_color, bsdf.inputs["Base Color"])
+            final_color = current_color
 
-        print(f"[MLD] Successfully built texture mask shader with {len(layers_data)} layers")
+        # Connect final color to BSDF
+        links.new(final_color, bsdf.inputs["Base Color"])
+
+        # Optional: Add normal/bump mapping if height images exist
+        if any(d.get('height_img') for d in layers_data):
+            # Create a simple bump node setup
+            bump = nodes.new("ShaderNodeBump")
+            bump.location = (1600, -200)
+            bump.inputs["Strength"].default_value = 0.5
+            
+            # For simplicity, use the first height map found
+            for data in layers_data:
+                if data.get('height_img'):
+                    h_img = data['height_img']
+                    
+                    # Height texture
+                    h_tex = nodes.new("ShaderNodeTexImage")
+                    h_tex.location = (1200, -200)
+                    h_tex.image = h_img
+                    h_tex.interpolation = 'Cubic'
+                    h_tex.extension = 'REPEAT'
+                    
+                    try:
+                        h_tex.image.colorspace_settings.name = "Non-Color"
+                    except:
+                        pass
+                    
+                    # Height mapping - ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ UV
+                    h_mapping = nodes.new("ShaderNodeMapping")
+                    h_mapping.location = (1000, -200)
+                    h_mapping.inputs["Scale"].default_value = (1.0, 1.0, 1.0)
+                    
+                    # Подключаем правильный UV к height mapping
+                    links.new(uv.outputs["UV"], h_mapping.inputs["Vector"])
+                    links.new(h_mapping.outputs["Vector"], h_tex.inputs["Vector"])
+                    links.new(h_tex.outputs["Color"], bump.inputs["Height"])
+                    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+                    break
+
+        # Don't assign material here - let the caller handle assignment
+        
+        print(f"[MLD] Successfully created packed texture mask shader with {len(layers_data)} layers using UV '{uv_name}'")
         return mat
         
     except Exception as e:
-        print(f"[MLD] Failed to build texture mask shader: {e}")
+        print(f"[MLD] Failed to build packed texture mask shader: {e}")
         import traceback
         traceback.print_exc()
         return None

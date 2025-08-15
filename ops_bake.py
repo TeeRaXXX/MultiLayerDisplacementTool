@@ -129,7 +129,7 @@ def _pack_vc_now(obj, s):
         return False, None
 
 def _pack_texture_mask_now(obj, s):
-    """Pack selected channels into texture mask with proper error handling."""
+    """Pack selected channels into texture mask with proper gap filling."""
     me = obj.data
     
     print(f"[MLD] Starting pack texture mask for object: {obj.name}")
@@ -148,10 +148,11 @@ def _pack_texture_mask_now(obj, s):
         print(f"[MLD] UV layer '{uv_name}' not found")
         return False, None
     
-    # Get texture name
+    # Get texture name and resolution
     texture_name = getattr(s, 'texture_mask_name', 'MLD_Mask')
+    resolution = int(getattr(s, 'texture_mask_resolution', '1024'))
     
-    # Check if the texture name conflicts with any MLD mask attributes
+    # Check for conflicts
     for L in s.layers:
         mask_name = getattr(L, 'mask_name', '')
         if mask_name and mask_name == texture_name:
@@ -167,124 +168,152 @@ def _pack_texture_mask_now(obj, s):
     
     print(f"[MLD] Channel assignments: {chan_map}")
     
-    # Create texture
+    # Create or get texture
     texture = bpy.data.images.get(texture_name)
     if not texture:
-        # Get resolution from settings
-        resolution = int(getattr(s, 'texture_mask_resolution', '1024'))
-        # Create new texture with specified resolution
         texture = bpy.data.images.new(texture_name, resolution, resolution)
         print(f"[MLD] Created new texture: {texture.name} ({resolution}×{resolution})")
     else:
         print(f"[MLD] Using existing texture: {texture.name}")
     
-    # Get texture dimensions
     width, height = texture.size
     
-    # Create pixel array
-    pixels = [0.0] * (width * height * 4)  # RGBA
-    
-    # Default fill value
+    # Initialize with default values
     default_fill = 1.0 if getattr(s, 'fill_empty_vc_white', False) else 0.0
+    pixels = [default_fill, default_fill, default_fill, 1.0] * (width * height)
     
-    # Fill with default values
-    for i in range(width * height):
-        pixel_idx = i * 4
-        pixels[pixel_idx] = default_fill     # R
-        pixels[pixel_idx + 1] = default_fill # G
-        pixels[pixel_idx + 2] = default_fill # B
-        pixels[pixel_idx + 3] = 1.0         # A
+    # Create a coverage map to track which pixels have real UV data
+    coverage_map = [[False for _ in range(width)] for _ in range(height)]
     
-    # Fill assigned channels from mask data
-    for ch, layer_idx in chan_map.items():
-        if layer_idx is None:
-            continue
+    # First pass: collect all UV coordinates and their mask values
+    uv_data = {}  # (px, py) -> {channel: value}
+    
+    for poly in me.polygons:
+        for loop_idx in poly.loop_indices:
+            loop = me.loops[loop_idx]
             
-        L = s.layers[layer_idx]
-        mask_name = getattr(L, 'mask_name', '')
-        
-        print(f"[MLD] Processing layer {layer_idx} channel {ch} with mask: {mask_name}")
-        
-        if not mask_name or not color_attr_exists(me, mask_name):
-            print(f"[MLD] Warning: Layer {layer_idx} channel {ch} has no mask: {mask_name}")
-            continue
-        
-        # Read mask data and map to texture coordinates
-        for poly in me.polygons:
-            for loop_idx in poly.loop_indices:
-                loop = me.loops[loop_idx]
+            # Get UV coordinates
+            if loop_idx < len(uv_layer.data):
+                uv_coords = uv_layer.data[loop_idx].uv
+                u, v = uv_coords.x, uv_coords.y
                 
-                # Get UV coordinates
-                if loop_idx < len(uv_layer.data):
-                    uv_coords = uv_layer.data[loop_idx].uv
-                    u, v = uv_coords.x, uv_coords.y
+                # Convert to pixel coordinates
+                px = int(u * width) % width
+                py = int(v * height) % height
+                
+                # Mark this pixel as having real UV data
+                coverage_map[py][px] = True
+                
+                # Collect mask values for assigned channels
+                if (px, py) not in uv_data:
+                    uv_data[(px, py)] = {}
+                
+                for ch, layer_idx in chan_map.items():
+                    if layer_idx is None:
+                        continue
+                        
+                    L = s.layers[layer_idx]
+                    mask_name = getattr(L, 'mask_name', '')
                     
-                    # Convert to pixel coordinates
-                    px = int(u * width) % width
-                    py = int(v * height) % height
+                    if not mask_name or not color_attr_exists(me, mask_name):
+                        continue
                     
-                    # Get mask value
                     try:
                         mask_value = loop_red(me, mask_name, loop_idx)
                         if mask_value is not None:
-                            # Set pixel value based on channel
-                            pixel_idx = (py * width + px) * 4
-                            if ch == 'R':
-                                pixels[pixel_idx] = float(mask_value)
-                            elif ch == 'G':
-                                pixels[pixel_idx + 1] = float(mask_value)
-                            elif ch == 'B':
-                                pixels[pixel_idx + 2] = float(mask_value)
-                            elif ch == 'A':
-                                pixels[pixel_idx + 3] = float(mask_value)
+                            # Take maximum value if multiple loops map to same pixel
+                            current_val = uv_data[(px, py)].get(ch, 0.0)
+                            uv_data[(px, py)][ch] = max(current_val, float(mask_value))
                     except Exception:
                         pass
     
-    # Fill gaps by interpolating between assigned pixels
-    # This helps eliminate black gaps between pixels
-    for y in range(height):
-        for x in range(width):
-            pixel_idx = (y * width + x) * 4
-            
-            # Check if this pixel has any non-default values (indicating it was filled with data)
-            has_data = False
-            for i in range(4):
-                if pixels[pixel_idx + i] != default_fill:
-                    has_data = True
-                    break
-            
-            # If this pixel has no data, try to interpolate from nearby pixels
-            if not has_data:
-                # Look for nearby pixels with data and interpolate
-                nearby_values = {'R': [], 'G': [], 'B': [], 'A': []}
+    # Second pass: write real UV data to pixels
+    for (px, py), channel_data in uv_data.items():
+        pixel_idx = (py * width + px) * 4
+        
+        for ch, layer_idx in chan_map.items():
+            if layer_idx is not None and ch in channel_data:
+                channel_idx = {'R': 0, 'G': 1, 'B': 2, 'A': 3}[ch]
+                pixels[pixel_idx + channel_idx] = channel_data[ch]
+    
+    # Third pass: iterative gap filling - only fill empty pixels!
+    print(f"[MLD] Filling gaps in texture (iterative approach)...")
+    
+    # Multiple passes to fill gaps progressively
+    max_iterations = 10  # Enough to fill even large gaps
+    
+    for iteration in range(max_iterations):
+        pixels_filled = 0
+        new_coverage = [row[:] for row in coverage_map]  # Copy coverage map
+        
+        for y in range(height):
+            for x in range(width):
+                # Skip pixels that already have real data
+                if coverage_map[y][x]:
+                    continue
                 
-                # Check in a 5x5 area around this pixel for better coverage
-                for dy in range(-2, 3):
-                    for dx in range(-2, 3):
+                pixel_idx = (y * width + x) * 4
+                
+                # Look for covered neighbors in 3x3 area
+                neighbor_values = {'R': [], 'G': [], 'B': [], 'A': []}
+                neighbor_count = 0
+                
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        if dx == 0 and dy == 0:
+                            continue
+                            
                         nx, ny = x + dx, y + dy
                         if 0 <= nx < width and 0 <= ny < height:
-                            nearby_idx = (ny * width + nx) * 4
-                            
-                            # Check if this nearby pixel has any data
-                            nearby_has_data = False
-                            for i in range(4):
-                                if pixels[nearby_idx + i] != default_fill:
-                                    nearby_has_data = True
-                                    break
-                            
-                            if nearby_has_data:
-                                # Check each channel
-                                for i, ch in enumerate(['R', 'G', 'B', 'A']):
-                                    val = pixels[nearby_idx + i]
-                                    if val != default_fill:
-                                        nearby_values[ch].append(val)
+                            if coverage_map[ny][nx]:  # This neighbor has data
+                                neighbor_idx = (ny * width + nx) * 4
+                                neighbor_values['R'].append(pixels[neighbor_idx])
+                                neighbor_values['G'].append(pixels[neighbor_idx + 1])
+                                neighbor_values['B'].append(pixels[neighbor_idx + 2])
+                                neighbor_values['A'].append(pixels[neighbor_idx + 3])
+                                neighbor_count += 1
                 
-                # Interpolate each channel
-                for i, ch in enumerate(['R', 'G', 'B', 'A']):
-                    if nearby_values[ch]:
-                        # Use average of nearby values
-                        avg_val = sum(nearby_values[ch]) / len(nearby_values[ch])
-                        pixels[pixel_idx + i] = avg_val
+                # If we found neighbors with data, fill this pixel
+                if neighbor_count > 0:
+                    for i, ch in enumerate(['R', 'G', 'B', 'A']):
+                        if neighbor_values[ch]:
+                            # Use average of all neighboring values
+                            avg_val = sum(neighbor_values[ch]) / len(neighbor_values[ch])
+                            pixels[pixel_idx + i] = avg_val
+                    
+                    new_coverage[y][x] = True  # Mark as filled
+                    pixels_filled += 1
+        
+        # Update coverage map
+        coverage_map = new_coverage
+        
+        print(f"[MLD] Iteration {iteration + 1}: filled {pixels_filled} pixels")
+        
+        # If no pixels were filled, we're done
+        if pixels_filled == 0:
+            print(f"[MLD] Gap filling complete after {iteration + 1} iterations")
+            break
+    
+    # Final pass: check how many pixels are still unfilled
+    unfilled_count = 0
+    for y in range(height):
+        for x in range(width):
+            if not coverage_map[y][x]:
+                unfilled_count += 1
+    
+    if unfilled_count > 0:
+        print(f"[MLD] Warning: {unfilled_count} pixels remain unfilled (isolated islands)")
+        # Fill remaining pixels with default value
+        for y in range(height):
+            for x in range(width):
+                if not coverage_map[y][x]:
+                    pixel_idx = (y * width + x) * 4
+                    pixels[pixel_idx] = default_fill      # R
+                    pixels[pixel_idx + 1] = default_fill  # G
+                    pixels[pixel_idx + 2] = default_fill  # B
+                    pixels[pixel_idx + 3] = 1.0           # A
+    else:
+        print(f"[MLD] ✓ All pixels successfully filled")
     
     # Write pixels to texture
     try:
