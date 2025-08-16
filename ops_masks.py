@@ -397,6 +397,21 @@ class MLD_OT_toggle_paint(Operator):
             try:
                 if obj.mode != 'VERTEX_PAINT':
                     bpy.ops.paint.vertex_paint_toggle()
+                    
+                    # Set paint colors and tool
+                    if hasattr(context.tool_settings, 'vertex_paint'):
+                        # Set primary color to red
+                        context.tool_settings.vertex_paint.brush.color = (1.0, 0.0, 0.0)
+                        # Set secondary color to black
+                        context.tool_settings.vertex_paint.brush.secondary_color = (0.0, 0.0, 0.0)
+                        
+                    # Set tool to brush
+                    if hasattr(context.workspace, 'tools'):
+                        for tool in context.workspace.tools:
+                            if tool.idname == 'builtin.brush':
+                                context.workspace.tools.active = tool
+                                break
+                                
             except Exception as e:
                 self.report({'WARNING'}, f"Could not enter vertex paint mode: {e}")
             

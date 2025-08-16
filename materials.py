@@ -158,9 +158,46 @@ def _assign_preview_slot0(obj: bpy.types.Object, mat: bpy.types.Material) -> Non
         pass
 
 def remove_preview_material(obj: bpy.types.Object) -> None:
-    """(Optional) implement restore if you saved original slots somewhere."""
-    # Keep as no-op unless you maintain original slots elsewhere.
-    pass
+    """Remove preview material from object and data."""
+    if not obj or obj.type != 'MESH':
+        return
+        
+    preview_name = f"MLD_Preview::{obj.name}"
+    
+    # Find the material index in object slots
+    material_index = None
+    for i, mat in enumerate(obj.data.materials):
+        if mat and mat.name == preview_name:
+            material_index = i
+            break
+    
+    if material_index is not None:
+        # Remove material from object slots
+        try:
+            obj.data.materials.pop(index=material_index)
+            
+            # Update polygon material indices to avoid invalid references
+            for poly in obj.data.polygons:
+                if poly.material_index == material_index:
+                    # Set to first available material or 0
+                    poly.material_index = 0 if len(obj.data.materials) > 0 else 0
+                elif poly.material_index > material_index:
+                    # Adjust indices for materials that came after the removed one
+                    poly.material_index -= 1
+            
+            # Update mesh data
+            obj.data.update()
+            
+        except Exception as e:
+            print(f"[MLD] Failed to remove preview material from object slots: {e}")
+    
+    # Remove from bpy.data.materials
+    mat = bpy.data.materials.get(preview_name)
+    if mat:
+        try:
+            bpy.data.materials.remove(mat, do_unlink=True)
+        except Exception as e:
+            print(f"[MLD] Failed to remove preview material from bpy.data.materials: {e}")
 
 # ----------------------------------------------------------------------------- #
 # НОВЫЕ функции смешивания для shader nodes

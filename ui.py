@@ -391,13 +391,8 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         col.label(text="Global Displacement")
-        col.prop(s, "strength", text="Final Strength")
+        col.prop(s, "strength", text="Strength")
         col.prop(s, "midlevel")
-        
-        # Показать информацию о fill_power (устарел)
-        info_row = col.row()
-        info_row.scale_y = 0.7
-        info_row.label(text="💡 Individual layer strength now in Layer Settings", icon='INFO')
 
         # 4) Layers list
         box = layout.box()
@@ -512,48 +507,6 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             hint = col.row()
             hint.scale_y = 0.7
             hint.label(text="Applied via Geometry Nodes on Recalculate", icon='INFO')
-
-        # 9) Materials + Preview (ОБНОВЛЕНО с информацией о новом смешивании)
-        box = layout.box()
-        col = box.column(align=True); col.enabled = not painting
-        col.label(text="Materials Assignment")
-        col.prop(s, "auto_assign_materials", text="Auto assign on Recalculate")
-        col.prop(s, "mask_threshold", text="Assignment Threshold")
-        _op(col, "mld.assign_materials_from_disp", text="Assign Now", icon='MATERIAL')
-
-        col.separator()
-        
-        # Preview header with info
-        header = col.row(align=True)
-        header.label(text="Preview Materials", icon='MATERIAL')
-        info_button = header.row()
-        info_button.scale_x = 0.5
-        info_button.label(text="📝", icon='NONE')  # Indicates changes applied on Recalculate
-        
-        col.prop(s, "preview_enable", text="Enable Preview")
-        if getattr(s, "preview_enable", False):
-            # Preview blend mode
-            col.prop(s, "preview_blend", text="Simple Blend Mode")
-            
-            # Advanced parameters (shown only in advanced mode)
-            if not getattr(s, "preview_blend", False):
-                sub = col.column(align=True)
-                sub.scale_y = 0.9
-                sub.prop(s, "preview_mask_influence", text="Mask Influence")
-                sub.prop(s, "preview_contrast", text="Contrast")
-            
-            # НОВОЕ: информация о режимах смешивания
-            info_row = col.row()
-            info_row.scale_y = 0.7
-            if has_layers and len(s.layers) > 1:
-                blend_modes = [L.blend_mode for L in s.layers[1:] if L.enabled]
-                if blend_modes:
-                    blend_info = ", ".join(set(blend_modes))
-                    info_row.label(text=f"🎨 Using: {blend_info}", icon='INFO')
-                else:
-                    info_row.label(text="Applied on Recalculate", icon='INFO')
-            else:
-                info_row.label(text="Applied on Recalculate", icon='INFO')
 
         # 10) Decimate (preview) - БЕЗ ИЗМЕНЕНИЙ
         box = layout.box()

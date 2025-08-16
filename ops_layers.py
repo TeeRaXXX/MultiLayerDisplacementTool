@@ -25,6 +25,16 @@ class MLD_OT_add_layer(Operator):
         # Set as active layer
         s.active_layer_index = idx - 1
         
+        # If this is the first layer, fill it with red color
+        if idx == 1:
+            try:
+                # Create red color attribute
+                from .ops_masks import create_color_attr
+                create_color_attr(obj.data, L.mask_name, (1.0, 0.0, 0.0, 1.0))
+                print(f"[MLD] First layer created and filled with red color")
+            except Exception as e:
+                print(f"[MLD] Failed to fill first layer with red: {e}")
+        
         return {'FINISHED'}
 
 class MLD_OT_remove_layer(Operator):

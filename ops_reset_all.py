@@ -3,6 +3,7 @@ import bpy
 from bpy.types import Operator
 from .utils import active_obj
 from .gn_multires import remove_multires_gn
+from .materials import remove_preview_material
 from .constants import (
     GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME,
     # Default values
@@ -130,6 +131,13 @@ class MLD_OT_reset_all(Operator):
             print(f"[MLD] Removed materials: {removed_mats}")
         except Exception as e:
             print(f"[MLD] Failed to clean materials: {e}")
+            
+        # Explicitly remove preview material
+        try:
+            remove_preview_material(obj)
+            print(f"[MLD] Explicitly removed preview material")
+        except Exception as e:
+            print(f"[MLD] Failed to remove preview material: {e}")
 
         # Clear layer materials before clearing layers
         for layer in s.layers:
