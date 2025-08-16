@@ -1,9 +1,9 @@
-# Bake mesh: apply GN/Subdiv/Decimate, optionally pack VC, cleanup layer attrs
+# Bake mesh: apply GN/Decimate, optionally pack VC, cleanup layer attrs
 import bpy
 from bpy.types import Operator
 from .utils import active_obj, polycount, safe_mode
 from .attrs import ensure_color_attr, color_attr_exists, loop_red
-from .constants import PACK_ATTR, ALPHA_PREFIX, GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
+from .constants import PACK_ATTR, ALPHA_PREFIX, GN_MOD_NAME, DECIMATE_MOD_NAME
 
 def _any_channel_assigned(s):
     return any(L.vc_channel in {'R','G','B','A'} for L in s.layers)
@@ -442,7 +442,7 @@ def _cleanup_after_bake(obj, preserve_vc_name=None):
 class MLD_OT_bake_mesh(Operator):
     bl_idname = "mld.bake_mesh"
     bl_label = "Bake Mesh"
-    bl_description = "Apply Subdiv/GN/Decimate, pack masks to vertex colors if channels assigned, remove layer attributes and carrier, clear settings"
+    bl_description = "Apply GN/Decimate, pack masks to vertex colors if channels assigned, remove layer attributes and carrier, clear settings"
 
     def execute(self, context):
         obj=active_obj(context)
@@ -551,18 +551,7 @@ class MLD_OT_bake_mesh(Operator):
 
         prev = safe_mode(obj, 'OBJECT')
 
-        # STEP 4: Apply modifiers in order: Subdiv -> GN -> Decimate
-        # Handle both new Geometry Nodes subdivision and fallback subdivision
-        subdiv_modifiers = ["MLD_SubdivGN", "MLD_Subdiv", SUBDIV_MOD_NAME]  # Try all possible names
-        for subdiv_name in subdiv_modifiers:
-            md = obj.modifiers.get(subdiv_name)
-            if md:
-                try:
-                    bpy.ops.object.modifier_apply(modifier=subdiv_name)
-                    print(f"[MLD] Applied subdivision modifier: {subdiv_name}")
-                    break
-                except Exception as e:
-                    print(f"[MLD] Failed to apply {subdiv_name}: {e}")
+        # STEP 4: Apply modifiers in order: GN -> Decimate
         
         # Apply other modifiers
         for name in (GN_MOD_NAME, DECIMATE_MOD_NAME):

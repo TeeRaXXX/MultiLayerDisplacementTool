@@ -2,8 +2,7 @@
 
 import bpy
 from bpy.types import Operator
-from .constants import GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
-from .gn_multires import remove_multires_gn
+from .constants import GN_MOD_NAME, DECIMATE_MOD_NAME
 
 class MLD_OT_reset_displacement(Operator):
     bl_idname = "mld.reset_displacement"
@@ -18,14 +17,10 @@ class MLD_OT_reset_displacement(Operator):
         
         print("[MLD] === RESET DISPLACEMENT START ===")
         
-        # Remove multiresolution modifier specifically
-        print("[MLD] Removing multiresolution modifiers...")
-        remove_multires_gn(obj)
-        
         # Remove other MLD modifiers
         mld_modifiers = [
-            SUBDIV_GN_MOD_NAME, "MLD_Subdiv", "MLD_MultiresGN", "MLD_Multires",
-            GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME
+            "MLD_Subdiv", "MLD_MultiresGN", "MLD_Multires",
+            GN_MOD_NAME, DECIMATE_MOD_NAME
         ]
         
         for name in mld_modifiers:

@@ -10,8 +10,6 @@ from .constants import (
     # Default values
     DEFAULT_ACTIVE_INDEX, DEFAULT_PAINTING, DEFAULT_VC_PACKED,
     DEFAULT_STRENGTH, DEFAULT_MIDLEVEL, DEFAULT_FILL_POWER,
-    DEFAULT_SUBDIV_ENABLE, DEFAULT_SUBDIV_TYPE, DEFAULT_SUBDIV_VIEW, DEFAULT_SUBDIV_RENDER,
-    DEFAULT_SUBDIV_PRESERVE_CREASES, DEFAULT_SUBDIV_SMOOTH_UVS,
     DEFAULT_AUTO_ASSIGN_MATERIALS, DEFAULT_MASK_THRESHOLD, DEFAULT_ASSIGN_THRESHOLD,
     DEFAULT_PREVIEW_ENABLE, DEFAULT_PREVIEW_BLEND, DEFAULT_PREVIEW_MASK_INFLUENCE, DEFAULT_PREVIEW_CONTRAST,
     DEFAULT_DECIMATE_ENABLE, DEFAULT_DECIMATE_RATIO,
@@ -53,13 +51,7 @@ def _on_preview_param(self, context):
     if getattr(self, "preview_enable", False):
         _preview_rebuild(context.object, self)
 
-def _on_subdiv_setting_change(self, context):
-    """Debug callback for subdivision settings changes."""
-    print(f"[MLD] Subdivision setting changed:")
-    print(f"[MLD]   - subdiv_enable: {getattr(self, 'subdiv_enable', False)}")
-    print(f"[MLD]   - subdiv_view: {getattr(self, 'subdiv_view', 1)}")
-    print(f"[MLD]   - subdiv_render: {getattr(self, 'subdiv_render', 1)}")
-    print(f"[MLD]   - subdiv_type: {getattr(self, 'subdiv_type', 'SIMPLE')}")
+
 
 # ------------------------------------------------------------------------------
 # Layer switching callback (OPTIMIZED)
@@ -179,10 +171,7 @@ class MLD_Layer(PropertyGroup):
 # Main settings (per object) - БЕЗ ИЗМЕНЕНИЙ
 # ------------------------------------------------------------------------------
 
-SUBDIV_TYPES = [
-    ('SIMPLE', "Simple", "Simple (no smoothing)"),
-    ('CATMULL_CLARK', "Catmull-Clark", "Smoothed subdivision"),
-]
+
 
 # ---- compatibility getters/setters (OPTIMIZED) ------------------------------
 
@@ -209,17 +198,7 @@ def _get_auto_assign_on_recalc(self):
 def _set_auto_assign_on_recalc(self, v): 
     self["auto_assign_materials"] = bool(v)
 
-def _get_subdiv_viewport_levels(self): 
-    return int(getattr(self, "subdiv_view", 1))
 
-def _set_subdiv_viewport_levels(self, v): 
-    self["subdiv_view"] = int(v)
-
-def _get_subdiv_render_levels(self): 
-    return int(getattr(self, "subdiv_render", 1))
-
-def _set_subdiv_render_levels(self, v): 
-    self["subdiv_render"] = int(v)
 
 def _get_fill_empty_vc_channels_with_white(self): 
     return bool(getattr(self, "fill_empty_vc_white", False))
@@ -227,23 +206,7 @@ def _get_fill_empty_vc_channels_with_white(self):
 def _set_fill_empty_vc_channels_with_white(self, v): 
     self["fill_empty_vc_white"] = bool(v)
 
-def _get_refine_enable(self): 
-    return bool(getattr(self, "subdiv_enable", False))
 
-def _set_refine_enable(self, v): 
-    self["subdiv_enable"] = bool(v)
-
-def _get_subdiv_levels_view(self): 
-    return int(getattr(self, "subdiv_view", 1))
-
-def _set_subdiv_levels_view(self, v): 
-    self["subdiv_view"] = int(v)
-
-def _get_subdiv_levels_render(self): 
-    return int(getattr(self, "subdiv_render", 1))
-
-def _set_subdiv_levels_render(self, v): 
-    self["subdiv_render"] = int(v)
 
 def _get_preview_blend(self): 
     return bool(getattr(self, "preview_enable", False))
@@ -302,35 +265,7 @@ class MLD_Settings(PropertyGroup):
     def _layers_len(self):  # convenience accessor
         return len(self.layers)
 
-    # Subdivision refine (preview helper)
-    subdiv_enable: BoolProperty(
-        name="Enable", default=DEFAULT_SUBDIV_ENABLE,
-        description="Enable subdivision refine step",
-        update=_on_subdiv_setting_change,
-    )
-    subdiv_type: EnumProperty(
-        name="Type", items=SUBDIV_TYPES, default=DEFAULT_SUBDIV_TYPE,
-        description="Subdivision type for refine step",
-    )
-    subdiv_view: IntProperty(
-        name="Viewport Levels", default=DEFAULT_SUBDIV_VIEW, min=0, soft_max=4,
-        description="Subdivision levels in viewport",
-        update=_on_subdiv_setting_change,
-    )
-    subdiv_render: IntProperty(
-        name="Render Levels", default=DEFAULT_SUBDIV_RENDER, min=0, soft_max=4,
-        description="Subdivision levels in render",
-    )
 
-    # НОВЫЕ subdivision параметры для Geometry Nodes
-    subdiv_preserve_creases: BoolProperty(
-        name="Preserve Creases", default=DEFAULT_SUBDIV_PRESERVE_CREASES,
-        description="Preserve sharp edges and creases during subdivision",
-    )
-    subdiv_smooth_uvs: BoolProperty(
-        name="Smooth UVs", default=DEFAULT_SUBDIV_SMOOTH_UVS,
-        description="Apply UV smoothing during subdivision",
-    )
 
     # Materials auto-assign after recalc
     auto_assign_materials: BoolProperty(
@@ -467,40 +402,14 @@ class MLD_Settings(PropertyGroup):
         get=_get_auto_assign_on_recalc, set=_set_auto_assign_on_recalc,
         description="Alias of 'auto_assign_materials' for older UI code",
     )
-    subdiv_viewport_levels: IntProperty(
-        name="Viewport Levels (alias)", min=0, soft_max=4,
-        get=_get_subdiv_viewport_levels, set=_set_subdiv_viewport_levels,
-        description="Alias of 'subdiv_view' for older UI code",
-    )
-    subdiv_render_levels: IntProperty(
-        name="Render Levels (alias)", min=0, soft_max=4,
-        get=_get_subdiv_render_levels, set=_set_subdiv_render_levels,
-        description="Alias of 'subdiv_render' for older UI code",
-    )
+
     fill_empty_vc_channels_with_white: BoolProperty(
         name="Fill empty VC channels with white (alias)",
         get=_get_fill_empty_vc_channels_with_white,
         set=_set_fill_empty_vc_channels_with_white,
         description="Alias of 'fill_empty_vc_white' for older UI code",
     )
-    # Current UI aliases:
-    refine_enable: BoolProperty(
-        name="Refine enable (alias)",
-        get=_get_refine_enable, set=_set_refine_enable,
-        description="Alias of 'subdiv_enable' for current UI",
-    )
-    subdiv_levels_view: IntProperty(
-        name="Viewport Levels (alias)",
-        min=0, soft_max=4,
-        get=_get_subdiv_levels_view, set=_set_subdiv_levels_view,
-        description="Alias of 'subdiv_view' for current UI",
-    )
-    subdiv_levels_render: IntProperty(
-        name="Render Levels (alias)",
-        min=0, soft_max=4,
-        get=_get_subdiv_levels_render, set=_set_subdiv_levels_render,
-        description="Alias of 'subdiv_render' for current UI",
-    )
+
     mat_assign_threshold: FloatProperty(
         name="Mask Threshold (alias)",
         min=0.0, max=1.0,

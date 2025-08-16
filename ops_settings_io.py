@@ -9,8 +9,6 @@ def _serialize_settings(obj):
     s=obj.mld_settings
     data = dict(
         strength=s.strength, midlevel=s.midlevel, fill_power=s.fill_power,
-        refine_enable=s.refine_enable, subdiv_type=s.subdiv_type,
-        subdiv_levels_view=s.subdiv_levels_view, subdiv_levels_render=s.subdiv_levels_render,
         decimate_enable=s.decimate_enable, decimate_ratio=s.decimate_ratio,
         auto_assign_materials=s.auto_assign_materials, mat_assign_threshold=s.mat_assign_threshold,
         preview_blend=s.preview_blend, preview_mask_influence=s.preview_mask_influence,
@@ -32,10 +30,6 @@ def _apply_settings(obj, data):
     s.strength = data.get('strength', s.strength)
     s.midlevel = data.get('midlevel', s.midlevel)
     s.fill_power = data.get('fill_power', s.fill_power)
-    s.refine_enable = data.get('refine_enable', s.refine_enable)
-    s.subdiv_type = data.get('subdiv_type', s.subdiv_type)
-    s.subdiv_levels_view = data.get('subdiv_levels_view', s.subdiv_levels_view)
-    s.subdiv_levels_render = data.get('subdiv_levels_render', s.subdiv_levels_render)
     s.decimate_enable = data.get('decimate_enable', s.decimate_enable)
     s.decimate_ratio = data.get('decimate_ratio', s.decimate_ratio)
     s.auto_assign_materials = data.get('auto_assign_materials', s.auto_assign_materials)

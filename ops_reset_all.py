@@ -1,16 +1,13 @@
-# ops_reset_all.py — ОБНОВЛЕННАЯ ВЕРСИЯ с multiresolution
+# ops_reset_all.py — ОБНОВЛЕННАЯ ВЕРСИЯ без multiresolution
 import bpy
 from bpy.types import Operator
 from .utils import active_obj
-from .gn_multires import remove_multires_gn
 from .materials import remove_preview_material
 from .constants import (
-    GN_MOD_NAME, SUBDIV_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME,
+    GN_MOD_NAME, DECIMATE_MOD_NAME,
     # Default values
     DEFAULT_ACTIVE_INDEX, DEFAULT_PAINTING, DEFAULT_VC_PACKED,
     DEFAULT_STRENGTH, DEFAULT_MIDLEVEL, DEFAULT_FILL_POWER,
-    DEFAULT_SUBDIV_ENABLE, DEFAULT_SUBDIV_TYPE, DEFAULT_SUBDIV_VIEW, DEFAULT_SUBDIV_RENDER,
-    DEFAULT_SUBDIV_PRESERVE_CREASES, DEFAULT_SUBDIV_SMOOTH_UVS,  # НОВЫЕ
     DEFAULT_AUTO_ASSIGN_MATERIALS, DEFAULT_MASK_THRESHOLD, DEFAULT_ASSIGN_THRESHOLD,
     DEFAULT_PREVIEW_ENABLE, DEFAULT_PREVIEW_BLEND, DEFAULT_PREVIEW_MASK_INFLUENCE, DEFAULT_PREVIEW_CONTRAST,
     DEFAULT_DECIMATE_ENABLE, DEFAULT_DECIMATE_RATIO,
@@ -91,11 +88,8 @@ class MLD_OT_reset_all(Operator):
             except Exception:
                 pass
 
-        # Remove multiresolution modifier specifically
-        remove_multires_gn(obj)
-        
         # Remove other modifiers
-        for name in (SUBDIV_GN_MOD_NAME, GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME):
+        for name in (GN_MOD_NAME, DECIMATE_MOD_NAME):
             md = obj.modifiers.get(name)
             if md:
                 try:
@@ -155,17 +149,6 @@ class MLD_OT_reset_all(Operator):
         s.midlevel = DEFAULT_MIDLEVEL
         s.fill_power = DEFAULT_FILL_POWER
         
-        # Reset subdivision settings (обновлено)
-        s.subdiv_enable = DEFAULT_SUBDIV_ENABLE
-        s.subdiv_type = DEFAULT_SUBDIV_TYPE
-        s.subdiv_view = DEFAULT_SUBDIV_VIEW
-        s.subdiv_render = DEFAULT_SUBDIV_RENDER
-        # Новые subdivision параметры
-        if hasattr(s, 'subdiv_preserve_creases'):
-            s.subdiv_preserve_creases = DEFAULT_SUBDIV_PRESERVE_CREASES
-        if hasattr(s, 'subdiv_smooth_uvs'):
-            s.subdiv_smooth_uvs = DEFAULT_SUBDIV_SMOOTH_UVS
-        
         # Reset material assignment settings
         s.auto_assign_materials = DEFAULT_AUTO_ASSIGN_MATERIALS
         s.mask_threshold = DEFAULT_MASK_THRESHOLD
@@ -189,7 +172,7 @@ class MLD_OT_reset_all(Operator):
         s.last_poly_f = DEFAULT_LAST_POLY_F
         s.last_poly_t = DEFAULT_LAST_POLY_T
 
-        self.report({'INFO'}, "MLD: Reset All done - all settings restored to defaults (Subdivision GN).")
+        self.report({'INFO'}, "MLD: Reset All done - all settings restored to defaults.")
         return {'FINISHED'}
 
 classes = (MLD_OT_reset_all,)

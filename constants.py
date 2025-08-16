@@ -2,9 +2,6 @@
 
 # Modifier names
 GN_MOD_NAME = "MLD_DisplaceGN"
-SUBDIV_GN_MOD_NAME = "MLD_SubdivGN"  # Оставляем для совместимости
-MULTIRES_GN_MOD_NAME = "MLD_MultiresGN"  # НОВАЯ КОНСТАНТА для multiresolution
-SUBDIV_MOD_NAME = "MLD_RefineSubdiv"  # Оставляем для совместимости
 DECIMATE_MOD_NAME = "MLD_Decimate"
 
 # Mesh attribute names
@@ -25,17 +22,11 @@ DEFAULT_PAINTING = False
 DEFAULT_VC_PACKED = False
 
 # Global displacement parameters defaults
-DEFAULT_STRENGTH = 1.0
+DEFAULT_STRENGTH = 0.25
 DEFAULT_MIDLEVEL = 0.50
 DEFAULT_FILL_POWER = 1.0
 
-# Subdivision settings defaults
-DEFAULT_SUBDIV_ENABLE = False
-DEFAULT_SUBDIV_TYPE = 'SIMPLE'
-DEFAULT_SUBDIV_VIEW = 1
-DEFAULT_SUBDIV_RENDER = 1
-DEFAULT_SUBDIV_PRESERVE_CREASES = True  # НОВАЯ
-DEFAULT_SUBDIV_SMOOTH_UVS = True       # НОВАЯ
+
 
 # Material assignment settings defaults
 DEFAULT_AUTO_ASSIGN_MATERIALS = False

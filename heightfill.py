@@ -11,7 +11,7 @@ from .attrs import ensure_float_attr, ensure_color_attr, point_red, loop_red, co
 from .constants import OFFS_ATTR, ALPHA_PREFIX
 
 def _get_evaluated_mesh(obj: bpy.types.Object, context):
-    """Get mesh with modifiers applied (subdivision etc.) for heightfill calculation."""
+    """Get mesh with modifiers applied for heightfill calculation."""
     try:
         # Get dependency graph
         depsgraph = context.evaluated_depsgraph_get()
@@ -63,39 +63,19 @@ def _transfer_result_to_original(original_me: bpy.types.Mesh, eval_me: bpy.types
         return False
     
     # Calculate vertex correspondence (eval→orig mapping)
-    # For subdivision, we need to map subdivided vertices back to original vertices
     orig_vcount = len(original_me.vertices)
     eval_vcount = len(eval_me.vertices)
     
     print(f"[MLD] Mapping: {eval_vcount} eval vertices → {orig_vcount} original vertices")
     
-    if eval_vcount == orig_vcount:
-        # No subdivision - direct 1:1 mapping
-        for vi in range(orig_vcount):
-            if vi < len(accum_offs):
-                ox, oy, oz = accum_offs[vi]
-                offs_attr.data[vi].vector = (0.0, 0.0, oz)
-                for i in range(n_layers):
-                    if alpha_attrs[i] and vi < len(accum_alpha[i]):
-                        alpha_attrs[i].data[vi].value = accum_alpha[i][vi]
-    else:
-        # Subdivision case - we need to average/interpolate back to original vertices
-        # Simple approach: use vertex correspondence based on position proximity
-        
-        # For subdivision, the first N vertices usually correspond to original vertices
-        for orig_vi in range(min(orig_vcount, eval_vcount)):
-            if orig_vi < len(accum_offs):
-                ox, oy, oz = accum_offs[orig_vi]
-                offs_attr.data[orig_vi].vector = (0.0, 0.0, oz)
-                for i in range(n_layers):
-                    if alpha_attrs[i] and orig_vi < len(accum_alpha[i]):
-                        alpha_attrs[i].data[orig_vi].value = accum_alpha[i][orig_vi]
-        
-        # For additional vertices created by subdivision, average their contribution back
-        if eval_vcount > orig_vcount:
-            # This is a simplified approach - in reality, subdivision creates specific patterns
-            # For now, we'll use the values from the first part (original vertices)
-            print(f"[MLD] Subdivision detected: using values from first {orig_vcount} vertices")
+    # Direct mapping for same topology
+    for vi in range(min(orig_vcount, eval_vcount)):
+        if vi < len(accum_offs):
+            ox, oy, oz = accum_offs[vi]
+            offs_attr.data[vi].vector = (0.0, 0.0, oz)
+            for i in range(n_layers):
+                if alpha_attrs[i] and vi < len(accum_alpha[i]):
+                    alpha_attrs[i].data[vi].value = accum_alpha[i][vi]
     
     original_me.update()
     return True
@@ -108,7 +88,7 @@ def _get_mask_value_for_loop(obj, eval_me, layer, li, vi, uv_name):
         if li < len(obj.data.loops):
             orig_li = li
         else:
-            # For subdivided meshes, find closest original loop
+            # For modified meshes, find closest original loop
             try:
                 work_uv = eval_me.uv_layers[uv_name].data[li].uv
                 min_dist = float('inf')
