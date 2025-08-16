@@ -1,9 +1,9 @@
-# ui.py — UI Panel for Multi Layer Displacement Tool (ПОЛНАЯ ОБНОВЛЕННАЯ ВЕРСИЯ)
+# ui.py — ОБНОВЛЕННЫЙ UI с новыми режимами смешивания
 from __future__ import annotations
 import bpy
 from bpy.props import IntProperty
 
-# ----------------- helpers ----------------------------------------------------
+# ----------------- helpers (без изменений) -------------------------
 
 def _s(obj):
     if obj and getattr(obj, "mld_settings", None):
@@ -234,6 +234,113 @@ def _draw_layer_row_improved(ui, layout, s, idx: int, active_idx: int, painting:
     op = _op(sub, "mld.remove_layer", text="", icon='X')
     _set(op, layer_index=idx, index=idx)
 
+# ----------------- НОВАЯ секция настроек активного слоя --------------------
+
+def _draw_active_layer_settings_new(box, s, L, painting):
+    """ОБНОВЛЕННЫЕ настройки активного слоя с новыми режимами смешивания."""
+    
+    col = box.column(align=True)
+    col.enabled = not painting
+    
+    # Basic height parameters (теперь четко обозначены)
+    col.label(text="Height Processing:", icon='TEXTURE')
+    row = col.row(align=True)
+    row.prop(L, "strength", text="Strength")
+    row.prop(L, "bias", text="Bias")
+    col.prop(L, "tiling")
+    
+    col.separator()
+    
+    # Blend mode (только для не-первых слоев)
+    layers = s.layers
+    layer_index = -1
+    for i, layer in enumerate(layers):
+        if layer == L:
+            layer_index = i
+            break
+    
+    if layer_index > 0:  # Not the first layer
+        col.label(text="Blending Mode:", icon='NODE_COMPOSITING')
+        col.prop(L, "blend_mode", text="")
+        
+        # Mode-specific parameters и подсказки
+        if L.blend_mode == 'SIMPLE':
+            # Для Simple режима нет дополнительных параметров
+            help_row = col.row()
+            help_row.scale_y = 0.7
+            help_row.label(text="🎯 Direct mask blending", icon='INFO')
+            
+        elif L.blend_mode == 'HEIGHT_BLEND':
+            row = col.row(align=True)
+            row.prop(L, "height_offset", text="Height Offset")
+            
+            # Add visual indicator for height offset value
+            offset_val = getattr(L, "height_offset", 0.5)
+            if offset_val <= 0.1:
+                icon_hint = '🔒'  # Locked/no blend
+                hint_text = "No blending"
+            elif offset_val >= 0.9:
+                icon_hint = '🔄'  # Full override  
+                hint_text = "Full override"
+            else:
+                icon_hint = '⚖️'  # Balanced
+                hint_text = "Height-based blend"
+            
+            help_row = col.row()
+            help_row.scale_y = 0.7
+            help_row.label(text=f"{icon_hint} {hint_text}", icon='INFO')
+            
+        elif L.blend_mode == 'SWITCH':
+            row = col.row(align=True)
+            row.prop(L, "switch_opacity", text="Switch Opacity")
+            
+            # Add visual indicator for switch opacity
+            opacity_val = getattr(L, "switch_opacity", 0.5)
+            if opacity_val <= 0.1:
+                icon_hint = '👻'  # Hidden
+                hint_text = "Hidden"
+            elif opacity_val >= 0.9:
+                icon_hint = '🎯'  # Full opacity
+                hint_text = "Full opacity"
+            else:
+                icon_hint = '🔀'  # Mixed
+                hint_text = f"{opacity_val*100:.0f}% mix"
+            
+            help_row = col.row()
+            help_row.scale_y = 0.7
+            help_row.label(text=f"{icon_hint} {hint_text}", icon='INFO')
+    else:
+        # Показать информацию для первого слоя
+        info_row = col.row()
+        info_row.scale_y = 0.8
+        info_row.label(text="🎯 Base layer (no blending)", icon='INFO')
+    
+    col.separator()
+    
+    # Mask settings
+    col.label(text="Mask Control:", icon='BRUSH_DATA')
+    col.prop(L, "mask_name", text="Mask Attribute")
+    
+    # Show mask status
+    if layer_index >= 0:
+        mask_name = getattr(L, "mask_name", "")
+        if mask_name:
+            # Try to check if mask exists
+            try:
+                obj = bpy.context.object
+                if obj and obj.type == 'MESH':
+                    mask_exists = _has_mask_attr(obj.data, mask_name)
+                    if mask_exists:
+                        status_row = col.row()
+                        status_row.scale_y = 0.7
+                        status_row.label(text="✓ Mask ready", icon='CHECKMARK')
+                    else:
+                        status_row = col.row()
+                        status_row.scale_y = 0.7
+                        status_row.label(text="⚠ Mask not found", icon='ERROR')
+            except Exception:
+                pass
+
 # ----------------- main panel -------------------------------------------------
 
 class VIEW3D_PT_mld(bpy.types.Panel):
@@ -280,12 +387,17 @@ class VIEW3D_PT_mld(bpy.types.Panel):
                 else:
                     col.label(text=info_line, icon='NONE')
 
-        # 3) Global parameters
+        # 3) Global parameters (ОБНОВЛЕНО)
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         col.label(text="Global Displacement")
-        col.prop(s, "strength")
+        col.prop(s, "strength", text="Final Strength")
         col.prop(s, "midlevel")
+        
+        # Показать информацию о fill_power (устарел)
+        info_row = col.row()
+        info_row.scale_y = 0.7
+        info_row.label(text="💡 Individual layer strength now in Layer Settings", icon='INFO')
 
         # 4) Layers list
         box = layout.box()
@@ -303,17 +415,13 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         else:
             box.label(text="No layers yet. Click + to add.", icon='INFO')
 
-        # 5) Active layer settings
+        # 5) ОБНОВЛЕННЫЕ настройки активного слоя
         ai = max(0, min(ai, len(s.layers)-1)) if has_layers else -1
         L = s.layers[ai] if has_layers else None
         box = layout.box()
         box.label(text="Active Layer Settings")
         if L:
-            col = box.column(align=True); col.enabled = not painting
-            col.prop(L, "multiplier")
-            col.prop(L, "bias")
-            col.prop(L, "tiling")
-            col.prop(L, "mask_name", text="Mask Attribute")
+            _draw_active_layer_settings_new(box, s, L, painting)
         else:
             box.label(text="Select a layer.", icon='BLANK1')
 
@@ -377,13 +485,13 @@ class VIEW3D_PT_mld(bpy.types.Panel):
         except Exception:
             lab = col.row(align=True); lab.enabled = False; lab.label(text="Reset ops missing")
 
-        # 8) Multiresolution refine (ОБНОВЛЕННАЯ СЕКЦИЯ С GEOMETRY NODES)
+        # 8) Multiresolution refine (БЕЗ ИЗМЕНЕНИЙ)
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         
         # Header with info
         header = col.row(align=True)
-        header.label(text="Refine (Multiresolution GN)", icon='GEOMETRY_NODES')  # ОБНОВЛЕНА ИКОНКА
+        header.label(text="Refine (Multiresolution GN)", icon='GEOMETRY_NODES')
         info_button = header.row()
         info_button.scale_x = 0.5
         info_button.label(text="📝", icon='NONE')  # Indicates changes applied on Recalculate
@@ -405,7 +513,7 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             hint.scale_y = 0.7
             hint.label(text="Applied via Geometry Nodes on Recalculate", icon='INFO')
 
-        # 9) Materials + Preview
+        # 9) Materials + Preview (ОБНОВЛЕНО с информацией о новом смешивании)
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         col.label(text="Materials Assignment")
@@ -434,12 +542,20 @@ class VIEW3D_PT_mld(bpy.types.Panel):
                 sub.prop(s, "preview_mask_influence", text="Mask Influence")
                 sub.prop(s, "preview_contrast", text="Contrast")
             
-            # Subtle hint
-            hint = col.row()
-            hint.scale_y = 0.7
-            hint.label(text="Applied on Recalculate", icon='INFO')
+            # НОВОЕ: информация о режимах смешивания
+            info_row = col.row()
+            info_row.scale_y = 0.7
+            if has_layers and len(s.layers) > 1:
+                blend_modes = [L.blend_mode for L in s.layers[1:] if L.enabled]
+                if blend_modes:
+                    blend_info = ", ".join(set(blend_modes))
+                    info_row.label(text=f"🎨 Using: {blend_info}", icon='INFO')
+                else:
+                    info_row.label(text="Applied on Recalculate", icon='INFO')
+            else:
+                info_row.label(text="Applied on Recalculate", icon='INFO')
 
-        # 10) Decimate (preview)
+        # 10) Decimate (preview) - БЕЗ ИЗМЕНЕНИЙ
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         
@@ -468,7 +584,7 @@ class VIEW3D_PT_mld(bpy.types.Panel):
             hint.scale_y = 0.7
             hint.label(text="Applied on Recalculate", icon='INFO')
 
-        # 11) Bake
+        # 11) Bake - БЕЗ ИЗМЕНЕНИЙ
         box = layout.box()
         col = box.column(align=True); col.enabled = not painting
         

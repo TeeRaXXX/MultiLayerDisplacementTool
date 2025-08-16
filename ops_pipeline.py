@@ -1,10 +1,10 @@
-# ops_pipeline.py — БЕЗОПАСНАЯ ВЕРСИЯ (предотвращение зависания)
+# ops_pipeline.py — ОБНОВЛЕННАЯ ВЕРСИЯ с новой системой смешивания
 
 from __future__ import annotations
 import bpy
 
-from .heightfill import solve_heightfill
-from .materials import build_heightlerp_preview_shader
+from .heightfill import solve_heightfill  # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+from .materials import build_heightlerp_preview_shader_new  # НОВЫЙ PREVIEW
 from .constants import GN_MOD_NAME, MULTIRES_GN_MOD_NAME, SUBDIV_MOD_NAME, DECIMATE_MOD_NAME, OFFS_ATTR
 from .carrier import ensure_carrier, sync_carrier_mesh
 from .gn_multires import ensure_multires_gn, remove_multires_gn, ensure_modifier_order
@@ -334,7 +334,7 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception:
             pass
 
-        print("[MLD] === SAFE MULTIRESOLUTION GN RECALCULATE START ===")
+        print("[MLD] === NEW BLENDING SYSTEM RECALCULATE START ===")
         
         # STEP 1: Setup multiresolution modifier (БЕЗОПАСНАЯ ВЕРСИЯ)
         multires_md = None
@@ -380,34 +380,54 @@ class MLD_OT_recalculate(bpy.types.Operator):
             print(f"[MLD] ✗ Carrier creation failed: {e}")
             return {'CANCELLED'}
 
-        # STEP 5: Compute heightfill on work mesh
-        print("[MLD] Computing heightfill on work mesh...")
+        # STEP 5: НОВАЯ система heightfill + Carrier integration
+        print("[MLD] Computing heightfill with NEW blending system...")
         try:
-            displacement_result = solve_heightfill_for_carrier(obj, s, context, work_mesh)
-            if not displacement_result:
-                raise Exception("Heightfill returned no data")
+            # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ из heightfill.py
+            success = solve_heightfill(obj, s, context, work_mesh)
+            if not success:
+                raise Exception("New heightfill returned False")
             
-            print(f"[MLD] ✓ Heightfill computed: {len(displacement_result)} displacement values")
+            print(f"[MLD] ✓ NEW Heightfill computed successfully")
+            
+            # STEP 5.5: Transfer results to carrier for GN
+            print("[MLD] Transferring heightfill results to carrier...")
+            try:
+                from .attrs import ensure_float_attr
+                from .constants import OFFS_ATTR
+                
+                # Ensure carrier has proper attributes
+                carrier_mesh = carrier.data
+                offs_attr = ensure_float_attr(carrier_mesh, OFFS_ATTR, domain='POINT', data_type='FLOAT_VECTOR')
+                
+                # Copy displacement data from original mesh to carrier
+                orig_offs_attr = obj.data.attributes.get(OFFS_ATTR)
+                if orig_offs_attr and offs_attr:
+                    # Direct copy for same topology
+                    max_copy = min(len(orig_offs_attr.data), len(offs_attr.data))
+                    for vi in range(max_copy):
+                        try:
+                            offs_attr.data[vi].vector = orig_offs_attr.data[vi].vector
+                        except Exception:
+                            offs_attr.data[vi].vector = (0.0, 0.0, 0.0)
+                    
+                    carrier_mesh.update()
+                    print(f"[MLD] ✓ Transferred {max_copy} displacement values to carrier")
+                else:
+                    print(f"[MLD] ⚠ Could not find displacement attributes for carrier transfer")
+                    
+            except Exception as e:
+                print(f"[MLD] ⚠ Carrier transfer failed: {e}")
+                # Continue anyway - displacement might still work
             
         except Exception as e:
-            print(f"[MLD] ✗ solve_heightfill failed: {e}")
+            print(f"[MLD] ✗ NEW heightfill failed: {e}")
             import traceback
             traceback.print_exc()
             self.report({'ERROR'}, "Height solve failed (check UV and height maps).")
             return {'CANCELLED'}
 
-        # STEP 6: Write displacement to carrier
-        try:
-            success = _write_displacement_to_carrier(obj, carrier, work_mesh, displacement_result)
-            if not success:
-                raise Exception("Failed to write displacement to carrier")
-            print("[MLD] ✓ Displacement written to carrier")
-            
-        except Exception as e:
-            print(f"[MLD] ✗ Carrier write failed: {e}")
-            return {'CANCELLED'}
-
-        # STEP 7: Setup GN modifier to read from carrier
+        # STEP 6: Setup GN modifier to read from carrier
         print("[MLD] Setting up Geometry Nodes...")
         try:
             gn_ok = _ensure_gn_modifier(obj)
@@ -423,7 +443,7 @@ class MLD_OT_recalculate(bpy.types.Operator):
             self.report({'ERROR'}, f"GN setup failed: {e}")
             return {'CANCELLED'}
 
-        # STEP 8: Setup decimate
+        # STEP 7: Setup decimate
         try:
             decimate_md = _ensure_decimate(obj, s)
             if decimate_md:
@@ -440,7 +460,7 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception as e:
             print(f"[MLD] ✗ Decimate setup failed: {e}")
 
-        # STEP 9: Auto-assign materials
+        # STEP 8: Auto-assign materials
         try:
             if getattr(s, "auto_assign_materials", False):
                 print("[MLD] Auto-assigning materials...")
@@ -448,20 +468,28 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception as e:
             print(f"[MLD] ✗ Auto assign failed: {e}")
 
-        # STEP 10: Build preview material
+        # STEP 9: НОВАЯ система preview материала
         try:
             if getattr(s, "preview_enable", False):
-                print("[MLD] Building preview material...")
-                build_heightlerp_preview_shader(
+                print("[MLD] Building preview material with NEW blending...")
+                
+                # Используем новую функцию preview
+                mat = build_heightlerp_preview_shader_new(
                     obj, s,
                     preview_influence=getattr(s, "preview_mask_influence", 1.0),
                     preview_contrast=getattr(s, "preview_contrast", 1.0),
                 )
-                print("[MLD] ✓ Preview material built")
+                
+                if mat:
+                    print("[MLD] ✓ NEW Preview material built")
+                else:
+                    print("[MLD] ⚠ Preview material creation failed")
         except Exception as e:
-            print(f"[MLD] ✗ Preview build failed: {e}")
+            print(f"[MLD] ✗ NEW Preview build failed: {e}")
+            import traceback
+            traceback.print_exc()
 
-        # STEP 11: Cleanup (БЕЗОПАСНО)
+        # STEP 10: Cleanup (БЕЗОПАСНО)
         if multires_mesh:
             try:
                 bpy.data.meshes.remove(multires_mesh, do_unlink=True)
@@ -512,204 +540,9 @@ class MLD_OT_recalculate(bpy.types.Operator):
         except Exception as e:
             print(f"[MLD] Warning: viewport update failed: {e}")
 
-        print("[MLD] === SAFE MULTIRESOLUTION GN RECALCULATE COMPLETE ===")
-        self.report({'INFO'}, "Displacement calculated using Multiresolution GN (SAFE MODE).")
+        print("[MLD] === NEW BLENDING SYSTEM RECALCULATE COMPLETE ===")
+        self.report({'INFO'}, "Displacement calculated using NEW blending system.")
         return {'FINISHED'}
-
-def solve_heightfill_for_carrier(obj: bpy.types.Object, s, context, work_mesh: bpy.types.Mesh):
-    """БЕЗОПАСНАЯ версия heightfill for carrier."""
-    try:
-        from .sampling import (
-            make_sampler, find_image_and_uv_from_displacement,
-            active_uv_layer_name, sample_height_at_loop,
-        )
-        from .attrs import point_red, loop_red, color_attr_exists
-        
-        # ПРОВЕРКА входных данных
-        if not work_mesh or not work_mesh.vertices:
-            print("[MLD] Error: Invalid work mesh")
-            return None
-        
-        # UV layer
-        uv_name = active_uv_layer_name(work_mesh)
-        if not uv_name:
-            uv_name = active_uv_layer_name(obj.data)
-        if not uv_name:
-            print("[MLD] Error: No UV layer found")
-            return None
-
-        # samplers per layer
-        samplers = []
-        for L in s.layers:
-            if not (L.enabled and L.material):
-                samplers.append(None)
-                continue
-            img, _ = find_image_and_uv_from_displacement(L.material)
-            samplers.append(make_sampler(img))
-
-        if not any(samplers):
-            print("[MLD] Error: No valid samplers found")
-            return None
-
-        n_layers = len(s.layers)
-        vcount = len(work_mesh.vertices)
-        
-        # ПРОВЕРКА разумности размера
-        if vcount > 1000000:  # 1 миллион вершин
-            print(f"[MLD] Warning: Very high vertex count: {vcount:,}")
-        
-        # Displacement accumulator
-        per_vertex_displacement = [0.0] * vcount
-        
-        print(f"[MLD] Processing {len(work_mesh.polygons)} polygons for carrier...")
-
-        # БЕЗОПАСНАЯ обработка полигонов с прогрессом
-        poly_count = len(work_mesh.polygons)
-        progress_step = max(1, poly_count // 20)  # 20 шагов прогресса
-        
-        for poly_idx, poly in enumerate(work_mesh.polygons):
-            # Прогресс лог
-            if poly_idx % progress_step == 0:
-                progress = (poly_idx / poly_count) * 100
-                print(f"[MLD] Processing polygons: {progress:.1f}% ({poly_idx}/{poly_count})")
-            
-            for li in range(poly.loop_start, poly.loop_start + poly.loop_total):
-                try:
-                    vi = work_mesh.loops[li].vertex_index
-                    
-                    # БЕЗОПАСНАЯ проверка индекса
-                    if vi >= vcount:
-                        print(f"[MLD] Warning: vertex index {vi} out of range")
-                        continue
-
-                    # Collect per-layer heights and masks
-                    h_layer = [0.0] * n_layers
-                    m_layer = [0.0] * n_layers
-                    
-                    for i, L in enumerate(s.layers):
-                        if not L.enabled:
-                            continue
-                        
-                        # Mask from original mesh - proper mapping
-                        m = 0.0
-                        if L.mask_name and color_attr_exists(obj.data, L.mask_name):
-                            # БЕЗОПАСНОЕ mapping work mesh loop to original mesh loop
-                            if li < len(obj.data.loops):
-                                orig_li = li
-                            else:
-                                # For subdivided meshes, find closest original loop
-                                try:
-                                    work_uv = work_mesh.uv_layers[uv_name].data[li].uv
-                                    min_dist = float('inf')
-                                    orig_li = 0
-                                    
-                                    # Ограничиваем поиск чтобы не зависнуть
-                                    search_limit = min(len(obj.data.loops), 10000)
-                                    for orig_loop_idx in range(search_limit):
-                                        try:
-                                            orig_uv = obj.data.uv_layers[uv_name].data[orig_loop_idx].uv
-                                            dist = ((work_uv.x - orig_uv.x) ** 2 + (work_uv.y - orig_uv.y) ** 2) ** 0.5
-                                            if dist < min_dist:
-                                                min_dist = dist
-                                                orig_li = orig_loop_idx
-                                        except Exception:
-                                            continue
-                                except Exception as e:
-                                    print(f"[MLD] Warning: UV mapping failed for loop {li}: {e}")
-                                    orig_li = min(li, len(obj.data.loops) - 1)
-                            
-                            m = loop_red(obj.data, L.mask_name, orig_li)
-                            if m is None:
-                                # Fallback to vertex-based reading
-                                if vi < len(obj.data.vertices):
-                                    orig_vi = vi
-                                else:
-                                    # БЕЗОПАСНЫЙ поиск closest original vertex
-                                    try:
-                                        work_vert = work_mesh.vertices[vi].co
-                                        min_dist = float('inf')
-                                        orig_vi = 0
-                                        
-                                        # Ограничиваем поиск
-                                        search_limit = min(len(obj.data.vertices), 10000)
-                                        for orig_vert_idx in range(search_limit):
-                                            orig_vert = obj.data.vertices[orig_vert_idx].co
-                                            dist = (work_vert - orig_vert).length
-                                            if dist < min_dist:
-                                                min_dist = dist
-                                                orig_vi = orig_vert_idx
-                                    except Exception:
-                                        orig_vi = min(vi, len(obj.data.vertices) - 1)
-                                
-                                m = point_red(obj.data, L.mask_name, orig_vi) or 0.0
-                        m_layer[i] = m
-
-                        # Height from work mesh
-                        smp = samplers[i]
-                        if smp is None:
-                            continue
-                        
-                        try:
-                            h = sample_height_at_loop(work_mesh, uv_name, li, max(1e-8, L.tiling), smp)
-                            h = h * L.multiplier + L.bias
-                            h_layer[i] = h
-                        except Exception as e:
-                            print(f"[MLD] Warning: height sampling failed for loop {li}: {e}")
-                            h_layer[i] = 0.0
-
-                    # HeightFill blend - ЛЕРПИНГ по маскам
-                    filled_h = 0.0
-                    total_weight = 0.0
-                    
-                    for i, L in enumerate(s.layers):
-                        m = m_layer[i]
-                        if m <= 0.0:
-                            continue
-                        
-                        # Простой лерпинг: взвешенная сумма высот по маскам
-                        filled_h += h_layer[i] * m
-                        total_weight += m
-                    
-                    # Нормализация если есть веса
-                    if total_weight > 0.0:
-                        filled_h /= total_weight
-
-                    # Add to vertex displacement (БЕЗОПАСНО)
-                    displacement = (filled_h - s.midlevel) * s.strength
-                    per_vertex_displacement[vi] += displacement
-                    
-                except Exception as e:
-                    print(f"[MLD] Warning: failed to process loop {li}: {e}")
-                    continue
-
-        # Average by vertex valence (БЕЗОПАСНО)
-        print(f"[MLD] Averaging by vertex valence...")
-        valence = [0] * vcount
-        
-        for p in work_mesh.polygons:
-            for li in range(p.loop_start, p.loop_start + p.loop_total):
-                try:
-                    vi = work_mesh.loops[li].vertex_index
-                    if vi < vcount:
-                        valence[vi] += 1
-                except Exception:
-                    continue
-
-        for vi in range(vcount):
-            try:
-                d = max(1, valence[vi])
-                per_vertex_displacement[vi] /= d
-            except Exception:
-                per_vertex_displacement[vi] = 0.0
-
-        print(f"[MLD] ✓ Carrier heightfill completed on {vcount} vertices")
-        return per_vertex_displacement
-
-    except Exception as e:
-        print(f"[MLD] Carrier heightfill failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
 
 # Register
 classes = (MLD_OT_recalculate,)

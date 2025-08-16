@@ -1,4 +1,4 @@
-# settings.py — property groups for Multi Layer Displacement Tool (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+# settings.py — ОБНОВЛЕННАЯ ВЕРСИЯ с новыми режимами смешивания
 from __future__ import annotations
 import bpy
 from bpy.types import PropertyGroup
@@ -11,7 +11,7 @@ from .constants import (
     DEFAULT_ACTIVE_INDEX, DEFAULT_PAINTING, DEFAULT_VC_PACKED,
     DEFAULT_STRENGTH, DEFAULT_MIDLEVEL, DEFAULT_FILL_POWER,
     DEFAULT_SUBDIV_ENABLE, DEFAULT_SUBDIV_TYPE, DEFAULT_SUBDIV_VIEW, DEFAULT_SUBDIV_RENDER,
-    DEFAULT_SUBDIV_PRESERVE_CREASES, DEFAULT_SUBDIV_SMOOTH_UVS,  # НОВЫЕ
+    DEFAULT_SUBDIV_PRESERVE_CREASES, DEFAULT_SUBDIV_SMOOTH_UVS,
     DEFAULT_AUTO_ASSIGN_MATERIALS, DEFAULT_MASK_THRESHOLD, DEFAULT_ASSIGN_THRESHOLD,
     DEFAULT_PREVIEW_ENABLE, DEFAULT_PREVIEW_BLEND, DEFAULT_PREVIEW_MASK_INFLUENCE, DEFAULT_PREVIEW_CONTRAST,
     DEFAULT_DECIMATE_ENABLE, DEFAULT_DECIMATE_RATIO,
@@ -24,19 +24,19 @@ from .constants import (
 )
 
 # ------------------------------------------------------------------------------
-# Preview callbacks (ONLY build/remove preview material; do NOT touch displacement)
+# Preview callbacks
 # ------------------------------------------------------------------------------
 
 def _preview_rebuild(obj: bpy.types.Object, s: "MLD_Settings"):
     try:
-        from .materials import build_heightlerp_preview_shader, remove_preview_material
+        from .materials import build_heightlerp_preview_shader_new, remove_preview_material
     except Exception:
         return
     if not obj or obj.type != 'MESH':
         return
     if getattr(s, "preview_enable", False):
         try:
-            build_heightlerp_preview_shader(
+            build_heightlerp_preview_shader_new(
                 obj, s,
                 preview_influence=getattr(s, "preview_mask_influence", 1.0),
                 preview_contrast=getattr(s, "preview_contrast", 1.0),
@@ -88,43 +88,8 @@ def _on_active_layer_change(self, context):
     except Exception as e:
         print("[MLD] Fast layer switch failed:", e)
 
-def remove_mld_materials(obj):
-    """Remove MLD-generated materials from object."""
-    if not obj or obj.type != 'MESH':
-        return []
-        
-    removed = []
-    materials_to_remove = []
-    
-    # Find MLD materials in object slots
-    for i, mat in enumerate(obj.data.materials):
-        if mat and mat.name.startswith("MLD_Preview::"):
-            materials_to_remove.append((i, mat))
-            
-    # Remove from slots (in reverse order to maintain indices)
-    for i, mat in reversed(materials_to_remove):
-        try:
-            obj.data.materials.pop(index=i)
-            removed.append(mat.name)
-        except Exception:
-            pass
-    
-    # Remove unused MLD materials from data
-    mld_materials = [mat for mat in bpy.data.materials 
-                     if mat.name.startswith("MLD_Preview::") and mat.users == 0]
-    
-    for mat in mld_materials:
-        try:
-            bpy.data.materials.remove(mat, do_unlink=True)
-            if mat.name not in removed:
-                removed.append(mat.name)
-        except Exception:
-            pass
-            
-    return removed
-
 # ------------------------------------------------------------------------------
-# Per-layer settings
+# Per-layer settings (ОБНОВЛЕННЫЕ)
 # ------------------------------------------------------------------------------
 
 VC_ENUM = [
@@ -133,6 +98,13 @@ VC_ENUM = [
     ('G', 'G', "Green"),
     ('B', 'B', "Blue"),
     ('A', 'A', "Alpha"),
+]
+
+# НОВЫЕ режимы смешивания (добавлен SIMPLE)
+BLEND_MODES = [
+    ('SIMPLE', "Simple", "Direct mask blending (lerp by mask only)"),
+    ('HEIGHT_BLEND', "Height Blend", "Substance Designer style height blending"),
+    ('SWITCH', "Switch", "Simple lerp/switch blending"),
 ]
 
 class MLD_Layer(PropertyGroup):
@@ -152,14 +124,36 @@ class MLD_Layer(PropertyGroup):
         description="Material used for this layer (BaseColor for preview, Displacement->Height for height sampling)",
         update=_update_name_from_mat,
     )
-    multiplier: FloatProperty(
-        name="Multiplier", default=DEFAULT_LAYER_MULTIPLIER, soft_min=-8.0, soft_max=8.0,
-        description="Multiply sampled height (per-layer)",
+    
+    # ОБНОВЛЕННЫЕ параметры height (переименованы для ясности)
+    strength: FloatProperty(
+        name="Height Strength", default=DEFAULT_LAYER_MULTIPLIER, soft_min=-8.0, soft_max=8.0,
+        description="Multiply height values for this layer (applied before blending)",
     )
     bias: FloatProperty(
-        name="Bias", default=DEFAULT_LAYER_BIAS, soft_min=-1.0, soft_max=1.0,
-        description="Add to sampled height (per-layer)",
+        name="Height Bias", default=DEFAULT_LAYER_BIAS, soft_min=-1.0, soft_max=1.0,
+        description="Add to height values for this layer (applied before blending)",
     )
+    
+    # ОБНОВЛЕННЫЕ настройки смешивания (default изменен на SIMPLE)
+    blend_mode: EnumProperty(
+        name="Blend Mode", items=BLEND_MODES, default='SIMPLE',
+        description="How this layer blends with layers below it",
+    )
+    
+    # Height blend specific
+    height_offset: FloatProperty(
+        name="Height Offset", default=0.5, min=0.0, max=1.0,
+        description="Height threshold for blending (0=no blend, 1=full override)",
+    )
+    
+    # Switch blend specific  
+    switch_opacity: FloatProperty(
+        name="Switch Opacity", default=0.5, min=0.0, max=1.0,
+        description="Opacity for switch blending (0=hidden, 1=full)",
+    )
+    
+    # Остальные настройки без изменений
     tiling: FloatProperty(
         name="Tiling", default=DEFAULT_LAYER_TILING, min=1e-6, soft_min=0.01, soft_max=32.0,
         description="UV scale for this layer",
@@ -172,9 +166,17 @@ class MLD_Layer(PropertyGroup):
         name="VC Channel", items=VC_ENUM, default=DEFAULT_LAYER_VC_CHANNEL,
         description="Pack this layer into chosen vertex color channel on Pack VC",
     )
+    
+    # COMPATIBILITY: Keep old property names as aliases
+    multiplier: FloatProperty(
+        name="Multiplier (deprecated)", default=DEFAULT_LAYER_MULTIPLIER,
+        get=lambda self: self.strength,
+        set=lambda self, value: setattr(self, 'strength', value),
+        description="Deprecated: use 'strength' instead",
+    )
 
 # ------------------------------------------------------------------------------
-# Main settings (per object)
+# Main settings (per object) - БЕЗ ИЗМЕНЕНИЙ
 # ------------------------------------------------------------------------------
 
 SUBDIV_TYPES = [
@@ -292,7 +294,7 @@ class MLD_Settings(PropertyGroup):
     )
     fill_power: FloatProperty(
         name="Fill Power", default=DEFAULT_FILL_POWER, min=0.0, soft_max=4.0,
-        description="Controls how aggressively higher layers 'fill' over lower layers",
+        description="DEPRECATED: no longer used in new blending system",
     )
 
     # Layers
@@ -309,7 +311,6 @@ class MLD_Settings(PropertyGroup):
     subdiv_type: EnumProperty(
         name="Type", items=SUBDIV_TYPES, default=DEFAULT_SUBDIV_TYPE,
         description="Subdivision type for refine step",
-        # НЕТ update callback
     )
     subdiv_view: IntProperty(
         name="Viewport Levels", default=DEFAULT_SUBDIV_VIEW, min=0, soft_max=4,
@@ -319,19 +320,16 @@ class MLD_Settings(PropertyGroup):
     subdiv_render: IntProperty(
         name="Render Levels", default=DEFAULT_SUBDIV_RENDER, min=0, soft_max=4,
         description="Subdivision levels in render",
-        # НЕТ update callback
     )
 
     # НОВЫЕ subdivision параметры для Geometry Nodes
     subdiv_preserve_creases: BoolProperty(
         name="Preserve Creases", default=DEFAULT_SUBDIV_PRESERVE_CREASES,
         description="Preserve sharp edges and creases during subdivision",
-        # НЕТ update callback - применяется при Recalculate
     )
     subdiv_smooth_uvs: BoolProperty(
         name="Smooth UVs", default=DEFAULT_SUBDIV_SMOOTH_UVS,
         description="Apply UV smoothing during subdivision",
-        # НЕТ update callback - применяется при Recalculate
     )
 
     # Materials auto-assign after recalc
@@ -353,34 +351,30 @@ class MLD_Settings(PropertyGroup):
     preview_enable: BoolProperty(
         name="Preview blend (materials)", default=DEFAULT_PREVIEW_ENABLE,
         description="Build and assign a HeightLerp-like preview material for the object (applied on Recalculate)",
-        update=_on_toggle_preview,  # Только toggle - включение/выключение
+        update=_on_toggle_preview,
     )
     preview_blend: BoolProperty(
         name="Simple Blend Mode", default=DEFAULT_PREVIEW_BLEND,
         description="Use simple additive blend instead of HeightLerp (all layers visible)",
-        update=_on_preview_param,  # Перестраиваем превью при изменении
+        update=_on_preview_param,
     )
     preview_mask_influence: FloatProperty(
         name="Preview Mask Influence", default=DEFAULT_PREVIEW_MASK_INFLUENCE, min=0.0, soft_max=2.0,
         description="How strongly paint mask affects preview blend",
-        # НЕТ update callback - применяется при Recalculate
     )
     preview_contrast: FloatProperty(
         name="Preview Contrast", default=DEFAULT_PREVIEW_CONTRAST, min=0.0, soft_max=8.0,
         description="How strongly height difference sharpens preview blend",
-        # НЕТ update callback - применяется при Recalculate
     )
 
     # Decimate (preview)
     decimate_enable: BoolProperty(
         name="Enable", default=DEFAULT_DECIMATE_ENABLE,
         description="Enable decimate for preview (applied on Recalculate only)",
-        # НЕТ update callback - изменения применяются только при Recalculate
     )
     decimate_ratio: FloatProperty(
         name="Ratio", default=DEFAULT_DECIMATE_RATIO, min=0.0, max=1.0,
         description="Decimation ratio for preview mesh (smaller = stronger reduction)",
-        # НЕТ update callback
     )
 
     # Pack Vertex Colors (moved to bake section)
@@ -540,22 +534,3 @@ def unregister():
         del bpy.types.Scene.mld_settings
     for c in reversed(classes):
         bpy.utils.unregister_class(c)
-
-
-# --- Compatibility aliases expected by operators ---
-try:
-    def _mld_get_active_layer_index(self):
-        return int(getattr(self, "active_index", 0))
-    def _mld_set_active_layer_index(self, v):
-        setattr(self, "active_index", int(v))
-    MLD_Settings.active_layer_index = property(_mld_get_active_layer_index, _mld_set_active_layer_index)
-except Exception:
-    pass
-try:
-    def _mld_get_is_painting(self):
-        return bool(getattr(self, "painting", False))
-    def _mld_set_is_painting(self, v):
-        setattr(self, "painting", bool(v))
-    MLD_Settings.is_painting = property(_mld_get_is_painting, _mld_set_is_painting)
-except Exception:
-    pass

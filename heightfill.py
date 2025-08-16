@@ -1,4 +1,4 @@
-# heightfill.py — ИСПРАВЛЕННАЯ ВЕРСИЯ с поддержкой evaluated mesh (с модификаторами)
+# heightfill.py — НОВАЯ СИСТЕМА СМЕШИВАНИЯ с Height Blend и Switch
 
 from __future__ import annotations
 import bpy
@@ -100,9 +100,211 @@ def _transfer_result_to_original(original_me: bpy.types.Mesh, eval_me: bpy.types
     original_me.update()
     return True
 
+def _get_mask_value_for_loop(obj, eval_me, layer, li, vi, uv_name):
+    """Get mask value for loop with proper mapping."""
+    m = 0.0
+    if layer.mask_name and color_attr_exists(obj.data, layer.mask_name):
+        # Map work mesh loop to original mesh loop properly
+        if li < len(obj.data.loops):
+            orig_li = li
+        else:
+            # For subdivided meshes, find closest original loop
+            try:
+                work_uv = eval_me.uv_layers[uv_name].data[li].uv
+                min_dist = float('inf')
+                orig_li = 0
+                for orig_loop_idx in range(min(len(obj.data.loops), 1000)):  # Limit search
+                    try:
+                        orig_uv = obj.data.uv_layers[uv_name].data[orig_loop_idx].uv
+                        dist = ((work_uv.x - orig_uv.x) ** 2 + (work_uv.y - orig_uv.y) ** 2) ** 0.5
+                        if dist < min_dist:
+                            min_dist = dist
+                            orig_li = orig_loop_idx
+                    except Exception:
+                        continue
+            except Exception:
+                orig_li = min(li, len(obj.data.loops) - 1)
+        
+        m = loop_red(obj.data, layer.mask_name, orig_li)
+        if m is None:
+            # Fallback to vertex-based reading
+            orig_vi = min(vi, len(obj.data.vertices) - 1)
+            m = point_red(obj.data, layer.mask_name, orig_vi) or 0.0
+    return m
+
+def _get_height_value_for_loop(eval_me, uv_name, li, layer, sampler):
+    """Get height value for loop."""
+    if sampler is None:
+        return 0.0
+    
+    try:
+        h = sample_height_at_loop(eval_me, uv_name, li, max(1e-8, layer.tiling), sampler)
+        return h
+    except Exception:
+        return 0.0
+
+def _blend_layers_new(layer_data, settings):
+    """
+    НОВАЯ СИСТЕМА СМЕШИВАНИЯ с Height Blend и Switch modes.
+    
+    Args:
+        layer_data: List of dicts with 'height', 'mask', 'layer' for each layer
+        settings: Global MLD settings
+    
+    Returns:
+        (final_height, alphas_list)
+    """
+    if not layer_data:
+        return 0.0, []
+    
+    n_layers = len(layer_data)
+    alphas = [0.0] * n_layers
+    
+    # Начинаем с первого слоя (базовый слой, без смешивания)
+    current_height = layer_data[0]['height'] * layer_data[0]['mask']
+    alphas[0] = layer_data[0]['mask']
+    
+    # Смешиваем последующие слои
+    for i in range(1, n_layers):
+        layer = layer_data[i]
+        L = layer['layer']
+        
+        # Пропускаем отключенные слои или слои без маски
+        if not L.enabled or layer['mask'] <= 0.0:
+            continue
+            
+        if L.blend_mode == 'SIMPLE':
+            current_height, alpha = _apply_simple_blend(
+                current_height,
+                layer['height'],
+                layer['mask']
+            )
+            alphas[i] = alpha
+            
+        elif L.blend_mode == 'HEIGHT_BLEND':
+            current_height, alpha = _apply_height_blend(
+                current_height, 
+                layer['height'], 
+                layer['mask'],
+                L.height_offset
+            )
+            alphas[i] = alpha
+            
+        elif L.blend_mode == 'SWITCH':
+            current_height, alpha = _apply_switch_blend(
+                current_height,
+                layer['height'],
+                layer['mask'],
+                L.switch_opacity
+            )
+            alphas[i] = alpha
+    
+    return current_height, alphas
+
+def _apply_simple_blend(base_height, layer_height, layer_mask):
+    """
+    Применить простое смешивание по маске.
+    
+    Args:
+        base_height: Высота от слоев ниже
+        layer_height: Высота текущего слоя
+        layer_mask: Сила маски (0-1) - прямое управление смешиванием
+    
+    Returns:
+        (blended_height, alpha_contribution)
+    """
+    if layer_mask <= 0.0:
+        return base_height, 0.0
+    
+    # Прямое использование маски как blend factor
+    final_blend = max(0.0, min(1.0, layer_mask))
+    
+    # Простая линейная интерполяция
+    blended_height = base_height * (1.0 - final_blend) + layer_height * final_blend
+    
+    return blended_height, final_blend
+
+def _apply_height_blend(base_height, layer_height, layer_mask, height_offset):
+    """
+    Применить Height Blend в стиле Substance Designer.
+    
+    Args:
+        base_height: Высота от слоев ниже
+        layer_height: Высота текущего слоя  
+        layer_mask: Сила маски (0-1)
+        height_offset: Порог высоты (0-1)
+    
+    Returns:
+        (blended_height, alpha_contribution)
+    """
+    if layer_mask <= 0.0:
+        return base_height, 0.0
+    
+    # Расчет разности высот
+    height_diff = layer_height - base_height
+    
+    # Применяем height_offset как порог
+    # При offset=0: слой никогда не проступает
+    # При offset=1: слой всегда проступает полностью
+    # При offset=0.5: сбалансированное смешивание на основе разности высот
+    
+    # Преобразуем height_offset в blend_factor
+    # Это имитирует поведение height blend из Substance Designer
+    if height_offset <= 0.0:
+        blend_factor = 0.0
+    elif height_offset >= 1.0:
+        blend_factor = 1.0
+    else:
+        # Плавное смешивание на основе разности высот и offset
+        # Offset действует как смещение - больший offset означает, что слой проступает легче
+        normalized_diff = (height_diff + 1.0) * 0.5  # Нормализуем в диапазон 0-1
+        
+        # Создаем S-образную кривую для более естественного смешивания
+        # height_offset контролирует точку перехода
+        blend_factor = max(0.0, min(1.0, 
+            (normalized_diff - (1.0 - height_offset)) / height_offset
+        ))
+        
+        # Сглаживание с помощью smoothstep
+        if blend_factor > 0.0 and blend_factor < 1.0:
+            blend_factor = blend_factor * blend_factor * (3.0 - 2.0 * blend_factor)
+    
+    # Применяем маску к blend_factor
+    final_blend = blend_factor * layer_mask
+    
+    # Линейная интерполяция
+    blended_height = base_height * (1.0 - final_blend) + layer_height * final_blend
+    
+    return blended_height, final_blend
+
+def _apply_switch_blend(base_height, layer_height, layer_mask, switch_opacity):
+    """
+    Применить простое Switch/lerp смешивание.
+    
+    Args:
+        base_height: Высота от слоев ниже
+        layer_height: Высота текущего слоя
+        layer_mask: Сила маски (0-1) 
+        switch_opacity: Фактор переключения (0-1)
+    
+    Returns:
+        (blended_height, alpha_contribution)
+    """
+    if layer_mask <= 0.0 or switch_opacity <= 0.0:
+        return base_height, 0.0
+    
+    # Комбинируем switch opacity с маской слоя
+    final_blend = switch_opacity * layer_mask
+    final_blend = max(0.0, min(1.0, final_blend))
+    
+    # Простая линейная интерполяция
+    blended_height = base_height * (1.0 - final_blend) + layer_height * final_blend
+    
+    return blended_height, final_blend
+
 def solve_heightfill(obj: bpy.types.Object, s, context=None, work_mesh: bpy.types.Mesh = None) -> bool:
     """
-    Core heightfill with support for custom work mesh (subdivision-aware).
+    ОБНОВЛЕННАЯ Core heightfill с новой системой смешивания слоев.
     Returns True on success.
     """
     if context is None:
@@ -142,98 +344,42 @@ def solve_heightfill(obj: bpy.types.Object, s, context=None, work_mesh: bpy.type
     accum_offs = [(0.0, 0.0, 0.0)] * vcount
     accum_alpha = [ [0.0]*vcount for _ in range(n_layers) ]
 
-    print(f"[MLD] Processing {len(eval_me.polygons)} polygons on work mesh...")
+    print(f"[MLD] Processing {len(eval_me.polygons)} polygons with NEW blending system...")
 
     # Process polygons on WORK mesh
     for poly in eval_me.polygons:
         for li in range(poly.loop_start, poly.loop_start + poly.loop_total):
             vi = eval_me.loops[li].vertex_index
 
-            # Collect per-layer masked heights for this loop
-            h_layer = [0.0]*n_layers
-            m_layer = [0.0]*n_layers
+            # Собираем данные по всем слоям для этого loop
+            layer_data = []
             
             for i, L in enumerate(s.layers):
                 if not L.enabled:
+                    layer_data.append({'height': 0.0, 'mask': 0.0, 'layer': L})
                     continue
                     
-                # Mask: read from ORIGINAL mesh (masks are painted on original) - proper mapping
-                m = 0.0
-                if L.mask_name and color_attr_exists(obj.data, L.mask_name):
-                    # Map work mesh loop to original mesh loop properly
-                    if li < len(obj.data.loops):
-                        # Direct mapping if work mesh is not larger than original
-                        orig_li = li
-                    else:
-                        # For subdivided meshes, find the closest original loop by UV distance
-                        work_uv = eval_me.uv_layers[uv_name].data[li].uv
-                        min_dist = float('inf')
-                        orig_li = 0
-                        for orig_loop_idx in range(len(obj.data.loops)):
-                            try:
-                                orig_uv = obj.data.uv_layers[uv_name].data[orig_loop_idx].uv
-                                dist = ((work_uv.x - orig_uv.x) ** 2 + (work_uv.y - orig_uv.y) ** 2) ** 0.5
-                                if dist < min_dist:
-                                    min_dist = dist
-                                    orig_li = orig_loop_idx
-                            except Exception:
-                                continue
-                    
-                    m = loop_red(obj.data, L.mask_name, orig_li)
-                    if m is None:
-                        # Fallback to vertex-based reading
-                        if vi < len(obj.data.vertices):
-                            orig_vi = vi
-                        else:
-                            # Find closest original vertex by position
-                            work_vert = eval_me.vertices[vi].co
-                            min_dist = float('inf')
-                            orig_vi = 0
-                            for orig_vert_idx in range(len(obj.data.vertices)):
-                                orig_vert = obj.data.vertices[orig_vert_idx].co
-                                dist = (work_vert - orig_vert).length
-                                if dist < min_dist:
-                                    min_dist = dist
-                                    orig_vi = orig_vert_idx
-                        
-                        m = point_red(obj.data, L.mask_name, orig_vi) or 0.0
-                else:
-                    m = 0.0
-                m_layer[i] = m
+                # Получаем значение маски (из оригинального меша)
+                m = _get_mask_value_for_loop(obj, eval_me, L, li, vi, uv_name)
+                
+                # Получаем значение высоты (из work mesh)
+                h = _get_height_value_for_loop(eval_me, uv_name, li, L, samplers[i])
+                
+                # НОВОЕ: Применяем strength и bias слоя ДО смешивания
+                h_processed = h * L.strength + L.bias
+                
+                layer_data.append({
+                    'height': h_processed,
+                    'mask': m,
+                    'layer': L
+                })
 
-                # Height: sample from WORK mesh (more detailed UVs)
-                smp = samplers[i]
-                if smp is None:
-                    continue
-                h = sample_height_at_loop(eval_me, uv_name, li, max(1e-8, L.tiling), smp)
-                h = h * L.multiplier + L.bias
-                h_layer[i] = h
+            # НОВЫЙ АЛГОРИТМ СМЕШИВАНИЯ
+            final_height, alphas = _blend_layers_new(layer_data, s)
 
-            # HeightFill blend logic (same as before)
-            filled_h = 0.0
-            alphas = [0.0]*n_layers
-            remain = 1.0
-            
-            for i, L in enumerate(s.layers):
-                m = m_layer[i]
-                if m <= 0.0:
-                    continue
-                if m >= 0.9999:
-                    filled_h = h_layer[i]
-                    alphas = [0.0]*n_layers
-                    alphas[i] = 1.0
-                    remain = 0.0
-                else:
-                    contrib = max(0.0, h_layer[i] - filled_h)
-                    gain = contrib * m * s.fill_power
-                    if gain > 0.0:
-                        filled_h = filled_h + gain
-                        alphas[i] += min(remain, m)
-                        remain = max(0.0, 1.0 - sum(alphas))
-
-            # Accumulate for work mesh vertex
+            # Накапливаем для вершины work mesh
             ox, oy, oz = accum_offs[vi]
-            accum_offs[vi] = (ox, oy, oz + (filled_h - s.midlevel) * s.strength)
+            accum_offs[vi] = (ox, oy, oz + (final_height - s.midlevel) * s.strength)
             for i in range(n_layers):
                 accum_alpha[i][vi] += alphas[i]
 
@@ -255,6 +401,8 @@ def solve_heightfill(obj: bpy.types.Object, s, context=None, work_mesh: bpy.type
     success = _transfer_result_to_original(obj.data, eval_me, accum_offs, accum_alpha, n_layers)
     
     if success:
-        print(f"[MLD] Heightfill completed successfully on {vcount} vertices")
+        print(f"[MLD] NEW heightfill completed successfully on {vcount} vertices")
+        blend_modes_used = [L.blend_mode for L in s.layers if L.enabled]
+        print(f"[MLD] Blend modes used: {blend_modes_used}")
     
     return success

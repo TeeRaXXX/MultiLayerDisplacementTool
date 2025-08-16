@@ -1,5 +1,4 @@
-# materials.py — HeightLerp-like preview shader for Multi Layer Displacement Tool
-# This ONLY affects viewport preview material; displacement logic is untouched.
+# materials.py — ОБНОВЛЕННАЯ ВЕРСИЯ с новыми режимами смешивания в preview
 
 from __future__ import annotations
 import bpy
@@ -13,9 +12,8 @@ from .sampling import (
 # Mask >= STRICT_THR → full override of lower stack (like "hard" paint = 1.0)
 STRICT_THR = 0.999
 
-
 # ----------------------------------------------------------------------------- #
-# helpers
+# helpers (без изменений)
 # ----------------------------------------------------------------------------- #
 
 def _get_preview_params(s) -> Tuple[float, float]:
@@ -31,7 +29,6 @@ def _get_preview_params(s) -> Tuple[float, float]:
     except Exception:
         contrast = 1.0
     return influence, contrast
-
 
 def _img_node(nodes, links, img: Optional[bpy.types.Image],
               uv_node: bpy.types.Node, tiling: float,
@@ -60,7 +57,6 @@ def _img_node(nodes, links, img: Optional[bpy.types.Image],
         rgb.outputs["Color"].default_value = (0.5, 0.5, 0.5, 1.0)
         return rgb
 
-
 def _height_scalar(nodes, links, color_socket, mult: float, bias: float, loc=(0, 0)):
     """RGB → BW → *mult → +bias → clamp[0..1]; returns Value socket."""
     tobw = nodes.new("ShaderNodeRGBToBW"); tobw.location = (loc[0] + 160, loc[1])
@@ -80,7 +76,6 @@ def _height_scalar(nodes, links, color_socket, mult: float, bias: float, loc=(0,
     links.new(add.outputs["Value"], clp.inputs["Value"])
     return clp.outputs["Result"]
 
-
 def _mask_factor(nodes, links, mask_name: str, influence: float, y=0):
     """Read mask (vertex color Red), apply influence and STRICT_THR. Returns Value 0..1."""
     if not mask_name or mask_name.strip() == "":
@@ -89,7 +84,7 @@ def _mask_factor(nodes, links, mask_name: str, influence: float, y=0):
         fallback.outputs["Value"].default_value = 0.5
         return fallback.outputs["Value"]
     
-    # Проверяем, существует ли атрибут (для случая, когда атрибуты уже удалены)
+    # Проверяем, существует ли атрибут
     try:
         attr = nodes.new("ShaderNodeAttribute"); attr.location = (-300, y)
         attr.attribute_name = mask_name or ""
@@ -131,7 +126,6 @@ def _mask_factor(nodes, links, mask_name: str, influence: float, y=0):
     links.new(mx.outputs["Value"], clp2.inputs["Value"])
     return clp2.outputs.get("Result") or clp2.outputs.get("Value") or clp2.outputs[0]
 
-
 def _material_get_or_create(obj: bpy.types.Object) -> bpy.types.Material:
     name = f"MLD_Preview::{obj.name}"
     mat = bpy.data.materials.get(name)
@@ -139,7 +133,6 @@ def _material_get_or_create(obj: bpy.types.Object) -> bpy.types.Material:
         mat = bpy.data.materials.new(name)
         mat.use_nodes = True
     return mat
-
 
 def _layer_images(L) -> Tuple[Optional[bpy.types.Image], Optional[bpy.types.Image]]:
     """Resolve BaseColor img and Height img for a layer.
@@ -149,7 +142,6 @@ def _layer_images(L) -> Tuple[Optional[bpy.types.Image], Optional[bpy.types.Imag
     if h_img is None:
         h_img = base_img
     return base_img, h_img
-
 
 def _assign_preview_slot0(obj: bpy.types.Object, mat: bpy.types.Material) -> None:
     """Force preview mat into slot 0 and ensure all faces use it."""
@@ -165,28 +157,206 @@ def _assign_preview_slot0(obj: bpy.types.Object, mat: bpy.types.Material) -> Non
     except Exception:
         pass
 
-
 def remove_preview_material(obj: bpy.types.Object) -> None:
     """(Optional) implement restore if you saved original slots somewhere."""
     # Keep as no-op unless you maintain original slots elsewhere.
     pass
 
-
 # ----------------------------------------------------------------------------- #
-# public api
+# НОВЫЕ функции смешивания для shader nodes
 # ----------------------------------------------------------------------------- #
 
-def build_heightlerp_preview_shader(obj: bpy.types.Object, s,
-                                    preview_influence: Optional[float] = None,
-                                    preview_contrast: Optional[float] = None) -> Optional[bpy.types.Material]:
+def _build_simple_blend_nodes(nodes, links, base_color, base_height, layer_color,
+                            layer_height, layer_mask, loc):
+    """Построить Simple blend shader nodes."""
+    
+    # Clamp маску на всякий случай
+    clamp_mask = nodes.new("ShaderNodeClamp")
+    clamp_mask.location = (loc[0], loc[1] - 50)
+    links.new(layer_mask, clamp_mask.inputs["Value"])
+    
+    # Смешивание цвета
+    mix_color = nodes.new("ShaderNodeMixRGB")
+    mix_color.location = (loc[0] + 150, loc[1])
+    mix_color.blend_type = 'MIX'
+    links.new(clamp_mask.outputs["Result"], mix_color.inputs["Fac"])
+    links.new(base_color, mix_color.inputs["Color1"])
+    links.new(layer_color, mix_color.inputs["Color2"])
+    
+    # Смешивание высоты
+    mix_height = nodes.new("ShaderNodeMixRGB")
+    mix_height.location = (loc[0] + 150, loc[1] - 200)
+    mix_height.blend_type = 'MIX'
+    links.new(clamp_mask.outputs["Result"], mix_height.inputs["Fac"])
+    links.new(base_height, mix_height.inputs["Color1"])
+    links.new(layer_height, mix_height.inputs["Color2"])
+    
+    return mix_color.outputs["Color"], mix_height.outputs["Color"]
+
+def _build_height_blend_nodes(nodes, links, base_color, base_height, layer_color, 
+                            layer_height, layer_mask, height_offset, loc):
+    """Построить Height Blend shader nodes (в стиле Substance Designer)."""
+    
+    # Разность высот
+    sub = nodes.new("ShaderNodeMath")
+    sub.location = (loc[0], loc[1] - 100)
+    sub.operation = 'SUBTRACT'
+    links.new(layer_height, sub.inputs[0])
+    links.new(base_height, sub.inputs[1])
+    
+    # Нормализация разности высот
+    add_norm = nodes.new("ShaderNodeMath")
+    add_norm.location = (loc[0] + 150, loc[1] - 100)
+    add_norm.operation = 'ADD'
+    add_norm.inputs[1].default_value = 1.0
+    links.new(sub.outputs["Value"], add_norm.inputs[0])
+    
+    mul_norm = nodes.new("ShaderNodeMath")
+    mul_norm.location = (loc[0] + 300, loc[1] - 100)
+    mul_norm.operation = 'MULTIPLY'
+    mul_norm.inputs[1].default_value = 0.5
+    links.new(add_norm.outputs["Value"], mul_norm.inputs[0])
+    
+    # Применяем height offset
+    sub_offset = nodes.new("ShaderNodeMath")
+    sub_offset.location = (loc[0] + 450, loc[1] - 100)
+    sub_offset.operation = 'SUBTRACT'
+    sub_offset.inputs[1].default_value = 1.0 - height_offset
+    links.new(mul_norm.outputs["Value"], sub_offset.inputs[0])
+    
+    # Деление на height_offset для создания правильного scaling
+    div_offset = nodes.new("ShaderNodeMath")
+    div_offset.location = (loc[0] + 600, loc[1] - 100)
+    div_offset.operation = 'DIVIDE'
+    div_offset.inputs[1].default_value = max(0.001, height_offset)  # Избегаем деления на 0
+    links.new(sub_offset.outputs["Value"], div_offset.inputs[0])
+    
+    # Clamp для получения blend_factor
+    clamp_blend = nodes.new("ShaderNodeClamp")
+    clamp_blend.location = (loc[0] + 750, loc[1] - 100)
+    links.new(div_offset.outputs["Value"], clamp_blend.inputs["Value"])
+    
+    # Smoothstep для более естественного перехода
+    # Используем формулу: t * t * (3 - 2 * t)
+    mul_t = nodes.new("ShaderNodeMath")
+    mul_t.location = (loc[0] + 900, loc[1] - 150)
+    mul_t.operation = 'MULTIPLY'
+    links.new(clamp_blend.outputs["Result"], mul_t.inputs[0])
+    links.new(clamp_blend.outputs["Result"], mul_t.inputs[1])
+    
+    mul_2t = nodes.new("ShaderNodeMath")
+    mul_2t.location = (loc[0] + 900, loc[1] - 200)
+    mul_2t.operation = 'MULTIPLY'
+    mul_2t.inputs[0].default_value = 2.0
+    links.new(clamp_blend.outputs["Result"], mul_2t.inputs[1])
+    
+    sub_3_2t = nodes.new("ShaderNodeMath")
+    sub_3_2t.location = (loc[0] + 1050, loc[1] - 200)
+    sub_3_2t.operation = 'SUBTRACT'
+    sub_3_2t.inputs[0].default_value = 3.0
+    links.new(mul_2t.outputs["Value"], sub_3_2t.inputs[1])
+    
+    smoothstep = nodes.new("ShaderNodeMath")
+    smoothstep.location = (loc[0] + 1200, loc[1] - 175)
+    smoothstep.operation = 'MULTIPLY'
+    links.new(mul_t.outputs["Value"], smoothstep.inputs[0])
+    links.new(sub_3_2t.outputs["Value"], smoothstep.inputs[1])
+    
+    # Применяем маску к smoothstep результату
+    mul_mask = nodes.new("ShaderNodeMath")
+    mul_mask.location = (loc[0] + 1350, loc[1] - 50)
+    mul_mask.operation = 'MULTIPLY'
+    links.new(smoothstep.outputs["Value"], mul_mask.inputs[0])
+    links.new(layer_mask, mul_mask.inputs[1])
+    
+    # Финальное смешивание цвета
+    mix_color = nodes.new("ShaderNodeMixRGB")
+    mix_color.location = (loc[0] + 1500, loc[1])
+    mix_color.blend_type = 'MIX'
+    links.new(mul_mask.outputs["Value"], mix_color.inputs["Fac"])
+    links.new(base_color, mix_color.inputs["Color1"])
+    links.new(layer_color, mix_color.inputs["Color2"])
+    
+    # Финальное смешивание высоты
+    mix_height = nodes.new("ShaderNodeMixRGB")
+    mix_height.location = (loc[0] + 1500, loc[1] - 200)
+    mix_height.blend_type = 'MIX'
+    links.new(mul_mask.outputs["Value"], mix_height.inputs["Fac"])
+    links.new(base_height, mix_height.inputs["Color1"])
+    links.new(layer_height, mix_height.inputs["Color2"])
+    
+    return mix_color.outputs["Color"], mix_height.outputs["Color"]
+
+def _build_switch_blend_nodes(nodes, links, base_color, base_height, layer_color,
+                            layer_height, layer_mask, switch_opacity, loc):
+    """Построить Switch blend shader nodes."""
+    
+    # Комбинируем opacity с маской
+    mul_switch = nodes.new("ShaderNodeMath")
+    mul_switch.location = (loc[0], loc[1] - 50)
+    mul_switch.operation = 'MULTIPLY'
+    mul_switch.inputs[0].default_value = switch_opacity
+    links.new(layer_mask, mul_switch.inputs[1])
+    
+    # Clamp результат
+    clamp_switch = nodes.new("ShaderNodeClamp")
+    clamp_switch.location = (loc[0] + 150, loc[1] - 50)
+    links.new(mul_switch.outputs["Value"], clamp_switch.inputs["Value"])
+    
+    # Смешивание цвета
+    mix_color = nodes.new("ShaderNodeMixRGB")
+    mix_color.location = (loc[0] + 300, loc[1])
+    mix_color.blend_type = 'MIX'
+    links.new(clamp_switch.outputs["Result"], mix_color.inputs["Fac"])
+    links.new(base_color, mix_color.inputs["Color1"])
+    links.new(layer_color, mix_color.inputs["Color2"])
+    
+    # Смешивание высоты
+    mix_height = nodes.new("ShaderNodeMixRGB")
+    mix_height.location = (loc[0] + 300, loc[1] - 200)
+    mix_height.blend_type = 'MIX'
+    links.new(clamp_switch.outputs["Result"], mix_height.inputs["Fac"])
+    links.new(base_height, mix_height.inputs["Color1"])
+    links.new(layer_height, mix_height.inputs["Color2"])
+    
+    return mix_color.outputs["Color"], mix_height.outputs["Color"]
+
+def _build_layer_blend_nodes_new(nodes, links, base_color, base_height, layer_color, layer_height, 
+                                layer_mask, blend_mode, height_offset=0.5, switch_opacity=0.5, loc=(0,0)):
     """
-    UE-like HeightLerp preview:
-      for each layer B above accumulated A:
-        Fac = saturate( Mask * Influence + (H_B - H_A) * Contrast )
-        Color = lerp(A_Color, B_Color, Fac)
-        H_accum = lerp(H_A, H_B, Fac)
-        
-    Alternative simple blend mode available via preview_blend setting.
+    Построить shader nodes для ВСЕХ режимов смешивания включая Simple.
+    """
+    
+    if blend_mode == 'SIMPLE':
+        return _build_simple_blend_nodes(nodes, links, base_color, base_height,
+                                       layer_color, layer_height, layer_mask, loc)
+    elif blend_mode == 'HEIGHT_BLEND':
+        return _build_height_blend_nodes(nodes, links, base_color, base_height, 
+                                       layer_color, layer_height, layer_mask, 
+                                       height_offset, loc)
+    elif blend_mode == 'SWITCH':
+        return _build_switch_blend_nodes(nodes, links, base_color, base_height,
+                                       layer_color, layer_height, layer_mask,
+                                       switch_opacity, loc)
+    else:
+        # Fallback к простому mix (как Simple)
+        mix = nodes.new("ShaderNodeMixRGB")
+        mix.location = loc
+        mix.blend_type = 'MIX'
+        links.new(layer_mask, mix.inputs["Fac"])
+        links.new(base_color, mix.inputs["Color1"])
+        links.new(layer_color, mix.inputs["Color2"])
+        return mix.outputs["Color"], layer_height
+
+# ----------------------------------------------------------------------------- #
+# ОБНОВЛЕННАЯ основная функция preview shader
+# ----------------------------------------------------------------------------- #
+
+def build_heightlerp_preview_shader_new(obj: bpy.types.Object, s,
+                                       preview_influence: Optional[float] = None,
+                                       preview_contrast: Optional[float] = None) -> Optional[bpy.types.Material]:
+    """
+    ОБНОВЛЕННЫЙ preview shader с новыми режимами смешивания.
     """
     if not obj or obj.type != 'MESH':
         return None
@@ -211,156 +381,91 @@ def build_heightlerp_preview_shader(obj: bpy.types.Object, s,
         _assign_preview_slot0(obj, mat)
         return mat
 
-    # Check if we should use simple blend mode
-    use_simple_blend = getattr(s, "preview_blend", False)
-
     # Create/clear preview material
     mat = _material_get_or_create(obj)
     nt = mat.node_tree; nodes, links = nt.nodes, nt.links
     nodes.clear()
 
-    out = nodes.new("ShaderNodeOutputMaterial"); out.location = (900, 0)
-    bsdf = nodes.new("ShaderNodeBsdfPrincipled"); bsdf.location = (680, 0)
+    out = nodes.new("ShaderNodeOutputMaterial"); out.location = (3000, 0)
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled"); bsdf.location = (2800, 0)
     bsdf.inputs["Roughness"].default_value = 0.5
     links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
 
     uv = nodes.new("ShaderNodeUVMap"); uv.location = (-520, 0)
     uv.uv_map = uv_name
 
-    layered_col = None  # current blended color
-    layered_h   = None  # current blended scalar height
+    print(f"[MLD] Building preview with NEW blending system for {len(layers)} layers")
+
+    # Построить layered blend с использованием новой системы
+    current_color = None
+    current_height = None
     y = 0
 
-    if use_simple_blend:
-        # Simple additive blend mode - all layers visible
-        for idx, L in enumerate(layers):
-            base_img, h_img = _layer_images(L)
+    for idx, L in enumerate(layers):
+        base_img, h_img = _layer_images(L)
 
-            # Color source for this layer
-            color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
-                                   loc=(-260, y), non_color=False)
-            color_socket = color_node.outputs["Color"]
+        # Color и height nodes для этого слоя
+        color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
+                              loc=(-260, y), non_color=False)
+        color_socket = color_node.outputs["Color"]
 
-            # Height source (Non-Color)
-            h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
-                               loc=(-260, y - 180), non_color=True)
-            h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
-                                      getattr(L, "multiplier", 1.0), getattr(L, "bias", 0.0),
-                                      loc=(-260, y - 180))
+        h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
+                          loc=(-260, y - 180), non_color=True)
+        
+        # НОВОЕ: используем strength и bias из слоя
+        h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
+                                 getattr(L, "strength", 1.0), getattr(L, "bias", 0.0),
+                                 loc=(-260, y - 180))
 
-            if layered_col is None:
-                # initialize with the first layer
-                layered_col = color_socket
-                layered_h   = h_scalar
+        if idx == 0:
+            # Первый слой - без смешивания
+            current_color = color_socket
+            current_height = h_scalar
+            print(f"[MLD] Layer {idx}: Base layer (no blending)")
+        else:
+            # Применяем маску
+            mask_socket = _mask_factor(nodes, links, getattr(L, "mask_name", "") or "", infl, y=y - 40)
+            
+            # НОВОЕ: применяем новое смешивание
+            blend_mode = getattr(L, "blend_mode", 'HEIGHT_BLEND')
+            height_offset = getattr(L, "height_offset", 0.5)
+            switch_opacity = getattr(L, "switch_opacity", 0.5)
+            
+            print(f"[MLD] Layer {idx}: {blend_mode} mode", end="")
+            if blend_mode == 'SIMPLE':
+                print(" (direct mask)")
+            elif blend_mode == 'HEIGHT_BLEND':
+                print(f" (offset={height_offset})")
+            elif blend_mode == 'SWITCH':
+                print(f" (opacity={switch_opacity})")
             else:
-                # Simple additive blend with mask influence
-                fac_mask = _mask_factor(nodes, links, getattr(L, "mask_name", "") or "", infl, y=y - 40)
-                
-                # Blend color: lerp(prev_color, this_color, Fac)
-                mix = nodes.new("ShaderNodeMixRGB"); mix.location = (480, y)
-                mix.blend_type = 'MIX'
-                links.new(fac_mask, mix.inputs["Fac"])
-                links.new(layered_col,            mix.inputs["Color1"])
-                links.new(color_socket,           mix.inputs["Color2"])
-                layered_col = mix.outputs["Color"]
+                print()
+            
+            current_color, current_height = _build_layer_blend_nodes_new(
+                nodes, links, current_color, current_height, color_socket, h_scalar,
+                mask_socket, blend_mode, height_offset, switch_opacity, loc=(800 + idx * 400, y)
+            )
 
-                # Blend height: lerp(prev_height, this_height, Fac)
-                hmix = nodes.new("ShaderNodeMixRGB"); hmix.location = (480, y - 180)
-                hmix.blend_type = 'MIX'
-                links.new(fac_mask, hmix.inputs["Fac"])
-                links.new(layered_h, hmix.inputs["Color1"])
-                links.new(h_scalar, hmix.inputs["Color2"])
-                layered_h = hmix.outputs["Color"]
+        y -= 400
 
-            y -= 260
-    else:
-        # Original HeightLerp blend mode
-        for idx, L in enumerate(layers):
-            base_img, h_img = _layer_images(L)
-
-            # Color source for this layer
-            color_node = _img_node(nodes, links, base_img, uv, getattr(L, "tiling", 1.0),
-                                   loc=(-260, y), non_color=False)
-            color_socket = color_node.outputs["Color"]
-
-            # Height source (Non-Color)
-            h_node = _img_node(nodes, links, h_img, uv, getattr(L, "tiling", 1.0),
-                               loc=(-260, y - 180), non_color=True)
-            h_scalar = _height_scalar(nodes, links, h_node.outputs["Color"],
-                                      getattr(L, "multiplier", 1.0), getattr(L, "bias", 0.0),
-                                      loc=(-260, y - 180))
-
-            if layered_col is None:
-                # initialize with the bottom layer
-                layered_col = color_socket
-                layered_h   = h_scalar
-            else:
-                # Mask term (0..1), with hard override at STRICT_THR
-                fac_mask = _mask_factor(nodes, links, getattr(L, "mask_name", "") or "", infl, y=y - 40)
-
-                # Height delta term: (H_B - H_A) * Contrast
-                sub = nodes.new("ShaderNodeMath"); sub.location = (160, y - 180); sub.operation = 'SUBTRACT'
-                links.new(h_scalar, sub.inputs[0])      # H_B
-                links.new(layered_h, sub.inputs[1])     # H_A
-
-                mulC = nodes.new("ShaderNodeMath"); mulC.location = (300, y - 180); mulC.operation = 'MULTIPLY'
-                mulC.inputs[1].default_value = float(contr)
-                links.new(sub.outputs["Value"], mulC.inputs[0])
-
-                # Combine mask and height influence with minimum visibility
-                addm = nodes.new("ShaderNodeMath"); addm.location = (440, y - 120); addm.operation = 'ADD'
-                links.new(fac_mask, addm.inputs[0])
-                links.new(mulC.outputs["Value"], addm.inputs[1])
-
-                # Ensure minimum visibility for each layer (0.1 minimum factor)
-                max_node = nodes.new("ShaderNodeMath"); max_node.location = (520, y - 120); max_node.operation = 'MAXIMUM'
-                max_node.inputs[1].default_value = 0.1
-                links.new(addm.outputs["Value"], max_node.inputs[0])
-
-                fac = nodes.new("ShaderNodeClamp"); fac.location = (660, y - 120)
-                links.new(max_node.outputs["Value"], fac.inputs["Value"])
-
-                # Blend color: lerp(prev_color, this_color, Fac)
-                mix = nodes.new("ShaderNodeMixRGB"); mix.location = (560, y)
-                mix.blend_type = 'MIX'
-                links.new(fac.outputs["Result"], mix.inputs["Fac"])
-                links.new(layered_col,            mix.inputs["Color1"])
-                links.new(color_socket,           mix.inputs["Color2"])
-                layered_col = mix.outputs["Color"]
-
-                # Propagate height for next iteration: H = lerp(H_A, H_B, Fac)
-                inv = nodes.new("ShaderNodeMath"); inv.location = (520, y - 220); inv.operation = 'SUBTRACT'
-                inv.inputs[0].default_value = 1.0
-                links.new(fac.outputs["Result"], inv.inputs[1])
-
-                aterm = nodes.new("ShaderNodeMath"); aterm.location = (680, y - 210); aterm.operation = 'MULTIPLY'
-                links.new(layered_h, aterm.inputs[0])
-                links.new(inv.outputs["Value"], aterm.inputs[1])
-
-                bterm = nodes.new("ShaderNodeMath"); bterm.location = (820, y - 210); bterm.operation = 'MULTIPLY'
-                links.new(h_scalar, bterm.inputs[0])
-                links.new(fac.outputs["Result"], bterm.inputs[1])
-
-                hmix = nodes.new("ShaderNodeMath"); hmix.location = (960, y - 210); hmix.operation = 'ADD'
-                links.new(aterm.outputs["Value"], hmix.inputs[0])
-                links.new(bterm.outputs["Value"], hmix.inputs[1])
-
-                layered_h = hmix.outputs.get("Result") or mix.outputs.get("Value") or mix.outputs[0]
-
-            y -= 260
-
-    # Drive BaseColor
-    links.new(layered_col, bsdf.inputs["Base Color"])
+    # Подключаем финальный результат
+    if current_color:
+        links.new(current_color, bsdf.inputs["Base Color"])
 
     _assign_preview_slot0(obj, mat)
+    print(f"[MLD] ✓ NEW preview material created with updated blending")
     return mat
 
+# COMPATIBILITY: Алиас для старого названия функции
+def build_heightlerp_preview_shader(obj: bpy.types.Object, s,
+                                   preview_influence: Optional[float] = None,
+                                   preview_contrast: Optional[float] = None) -> Optional[bpy.types.Material]:
+    """Compatibility wrapper for the new blending system."""
+    return build_heightlerp_preview_shader_new(obj, s, preview_influence, preview_contrast)
 
-# convenience wrapper if elsewhere referenced
-def ensure_preview_material(obj: bpy.types.Object, s) -> None:
-    """Build the HeightLerp-style preview material for the object."""
-    build_heightlerp_preview_shader(obj, s)
-
+# ----------------------------------------------------------------------------- #
+# Остальные функции остаются без изменений
+# ----------------------------------------------------------------------------- #
 
 def build_packed_vc_preview_shader(obj: bpy.types.Object, s) -> bpy.types.Material:
     """
@@ -490,7 +595,6 @@ def build_packed_vc_preview_shader(obj: bpy.types.Object, s) -> bpy.types.Materi
 
         # Get preview parameters
         infl, contr = _get_preview_params(s)
-        use_simple_blend = getattr(s, "preview_blend", False)
 
         # Create texture nodes for each layer
         x_offset = -600
@@ -894,4 +998,4 @@ def build_packed_texture_mask_shader(obj: bpy.types.Object, s) -> bpy.types.Mate
 
 def ensure_preview_material(obj: bpy.types.Object, s) -> None:
     """Build the HeightLerp-style preview material for the object."""
-    build_heightlerp_preview_shader(obj, s)
+    build_heightlerp_preview_shader_new(obj, s)
